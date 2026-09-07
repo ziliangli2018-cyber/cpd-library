@@ -1,0 +1,1001 @@
+'use client';
+import { useMemo, useRef, useState } from 'react';
+import {
+  BookOpen,
+  ChevronLeft,
+  ChevronRight,
+  CloudUpload,
+  Download,
+  ExternalLink,
+  FolderOpen,
+  LibraryBig,
+  LockKeyhole,
+  NotebookPen,
+  Play,
+  Plus,
+  Search,
+  Settings2,
+  ShieldCheck,
+  Video,
+  X,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import {
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  DialogDescription,
+} from '@/components/ui/dialog';
+import {
+  SidebarProvider,
+  Sidebar,
+  SidebarHeader,
+  SidebarContent,
+  SidebarFooter,
+  SidebarInset,
+  SidebarTrigger,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuButton,
+} from '@/components/ui/sidebar';
+import { Choice } from '@/components/choice';
+import { LectureEditor, duration } from '@/components/lecture-editor';
+import {
+  DISCIPLINES,
+  filterLectures,
+  mergeCatalogues,
+  validateCatalogue,
+  type Catalogue,
+  type Lecture,
+} from '@/lib/catalogue';
+import {
+  fingerprint,
+  openWithSession,
+  seal,
+  type VaultSession,
+} from '@/lib/vault';
+import { writeDraft } from '@/lib/storage';
+import { pushGithub, readGithub, type GithubConfig } from '@/lib/github';
+export type Opened = {
+  catalogue: Catalogue;
+  session: VaultSession;
+  baseline: string;
+  dirty: boolean;
+  notice: string;
+};
+const fmt = (n: number) => n.toLocaleString();
+const msg = (e: unknown) =>
+  e instanceof Error ? e.message : 'Something went wrong. Please try again.';
+export default function Library({
+  initial,
+  lock,
+}: {
+  initial: Opened;
+  lock: () => void;
+}) {
+  const [data, setData] = useState(initial.catalogue);
+  const [baseline, setBaseline] = useState(initial.baseline);
+  const [dirty, setDirty] = useState(initial.dirty);
+  const [notice, setNotice] = useState(initial.notice);
+  const [saveStatus, setSaveStatus] = useState(
+    initial.dirty ? 'Unpublished changes' : 'Shared library up to date',
+  );
+  const [busy, setBusy] = useState(false);
+  const [view, setView] = useState('lectures');
+  const [query, setQuery] = useState('');
+  const [discipline, setDiscipline] = useState('');
+  const [source, setSource] = useState('');
+  const [status, setStatus] = useState('');
+  const [tag, setTag] = useState('');
+  const [course, setCourse] = useState('');
+  const [sort, setSort] = useState('course');
+  const [pagination, setPagination] = useState({ key: '', page: 1 });
+  const [editing, setEditing] = useState<Lecture | null>(null);
+  const [settings, setSettings] = useState(false);
+  const [settingsError, setSettingsError] = useState('');
+  const [config, setConfig] = useState<GithubConfig>({
+    repo: 'ziliangli2018-cyber/cpd-library',
+    branch: 'main',
+    token: '',
+  });
+  const fileInput = useRef<HTMLInputElement>(null);
+  const filterKey = JSON.stringify([
+    query,
+    discipline,
+    source,
+    status,
+    tag,
+    course,
+    sort,
+    view,
+  ]);
+  const page = pagination.key === filterKey ? pagination.page : 1;
+  function setPage(next: number) {
+    setPagination({ key: filterKey, page: next });
+  }
+  const counts = useMemo(
+    () =>
+      new Map(
+        DISCIPLINES.map((d) => [
+          d,
+          data.lectures.filter((v) => v.discipline === d).length,
+        ]),
+      ),
+    [data],
+  );
+  const linked = data.lectures.filter((v) => v.youtubeUrl).length;
+  const noted = data.lectures.filter((v) => v.notes.trim()).length;
+  const courses = useMemo(
+    () =>
+      [
+        ...new Set(
+          data.lectures
+            .filter(
+              (v) =>
+                (!discipline || v.discipline === discipline) &&
+                (!source || v.source === source),
+            )
+            .map((v) => v.course),
+        ),
+      ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
+    [data, discipline, source],
+  );
+  const sources = [...new Set(data.lectures.map((v) => v.source))];
+  const tags = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const v of data.lectures)
+      for (const t of v.tags) map.set(t, (map.get(t) || 0) + 1);
+    return [...map.entries()].sort((a, b) => b[1] - a[1]).slice(0, 8);
+  }, [data]);
+  const filtered = useMemo(
+    () =>
+      filterLectures(
+        view === 'notes'
+          ? data.lectures.filter((v) => v.notes.trim())
+          : data.lectures,
+        { query, discipline, source, status, tag, course },
+      ).sort((a, b) =>
+        sort === 'updated'
+          ? b.updatedAt.localeCompare(a.updatedAt)
+          : sort === 'title'
+            ? a.title.localeCompare(b.title, undefined, { numeric: true })
+            : a.course.localeCompare(b.course, undefined, { numeric: true }) ||
+              a.relativePath.localeCompare(b.relativePath, undefined, {
+                numeric: true,
+              }),
+      ),
+    [data, view, query, discipline, source, status, tag, course, sort],
+  );
+  const totalPages = Math.max(1, Math.ceil(filtered.length / 30));
+  const currentPage = Math.min(page, totalPages);
+  const rows = filtered.slice((currentPage - 1) * 30, currentPage * 30);
+  function clearFilters() {
+    setQuery('');
+    setDiscipline('');
+    setSource('');
+    setStatus('');
+    setTag('');
+    setCourse('');
+  }
+  function nav(v: string) {
+    setView(v);
+    clearFilters();
+  }
+  async function save(next: Catalogue) {
+    setBusy(true);
+    setData(next);
+    setDirty(true);
+    setSaveStatus('Saving encrypted draft…');
+    try {
+      await writeDraft({
+        envelope: await seal(next, initial.session),
+        baseline,
+        dirty: true,
+      });
+      setSaveStatus('Encrypted draft saved in this browser');
+    } catch (e) {
+      setSaveStatus('Changes in memory only');
+      setNotice(msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function saveLecture(v: Lecture) {
+    const exists = data.lectures.some((x) => x.id === v.id);
+    await save({
+      ...data,
+      updatedAt: new Date().toISOString(),
+      lectures: exists
+        ? data.lectures.map((x) => (x.id === v.id ? v : x))
+        : [v, ...data.lectures],
+    });
+    setEditing(null);
+  }
+  function addLecture() {
+    const now = new Date().toISOString();
+    setEditing({
+      id: crypto.randomUUID(),
+      title: '',
+      course: '',
+      module: '',
+      discipline: discipline || 'General dentistry',
+      tags: [],
+      youtubeUrl: '',
+      notes: '',
+      source: 'Manually added',
+      relativePath: '',
+      duration: null,
+      bytes: 0,
+      importedAt: now,
+      updatedAt: now,
+      classificationReviewed: true,
+      availability: 'Added manually',
+    });
+  }
+  async function exportBackup() {
+    setBusy(true);
+    try {
+      const envelope = await seal(data, initial.session);
+      const url = URL.createObjectURL(
+        new Blob([JSON.stringify(envelope)], { type: 'application/json' }),
+      );
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `dental-library-${new Date().toISOString().slice(0, 10)}.enc.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      setNotice(
+        'Encrypted backup downloaded. Keep it with your library password.',
+      );
+    } catch (e) {
+      setNotice(msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function importBackup(file: File) {
+    setBusy(true);
+    setSettingsError('');
+    try {
+      if (file.size > 80_000_000) throw new Error('That backup is too large.');
+      const imported = validateCatalogue(
+        await openWithSession(JSON.parse(await file.text()), initial.session),
+      );
+      const { catalogue: merged, changes } = mergeCatalogues(data, imported);
+      await save(merged);
+      setNotice(
+        `Merged ${fmt(changes)} updates. Newer edits and source scan information were retained.`,
+      );
+      setSettings(false);
+      setConfig((c) => ({ ...c, token: '' }));
+    } catch (e) {
+      setSettingsError(msg(e));
+    } finally {
+      setBusy(false);
+      if (fileInput.current) fileInput.current.value = '';
+    }
+  }
+  async function publish() {
+    setBusy(true);
+    setSettingsError('');
+    try {
+      const envelope = await seal(data, initial.session);
+      await pushGithub(config, envelope, baseline);
+      const nextBaseline = await fingerprint(envelope);
+      setBaseline(nextBaseline);
+      setDirty(false);
+      setSaveStatus('Saved to GitHub');
+      try {
+        await writeDraft({ envelope, baseline: nextBaseline, dirty: false });
+      } catch {
+        setSettingsError(
+          'Saved to GitHub, but this browser could not update its cached draft.',
+        );
+        return;
+      }
+      setNotice(
+        'Saved to GitHub. The hosted library will update when its deployment finishes.',
+      );
+      setSettings(false);
+      setConfig((c) => ({ ...c, token: '' }));
+    } catch (e) {
+      setSettingsError(msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function loadLatest() {
+    setBusy(true);
+    setSettingsError('');
+    try {
+      const remote = await readGithub(config);
+      const latest = validateCatalogue(
+        await openWithSession(remote.envelope, initial.session),
+      );
+      const nextBaseline = await fingerprint(remote.envelope);
+      const { catalogue: next, changes: wins } = dirty
+        ? mergeCatalogues(latest, data)
+        : { catalogue: latest, changes: 0 };
+      await writeDraft({
+        envelope: await seal(next, initial.session),
+        baseline: nextBaseline,
+        dirty: wins > 0,
+      });
+      setData(next);
+      setBaseline(nextBaseline);
+      setDirty(wins > 0);
+      setSaveStatus(
+        wins
+          ? 'Merged draft saved in this browser'
+          : 'Shared library up to date',
+      );
+      setNotice(
+        wins
+          ? `Latest library loaded; ${wins} newer local lectures retained. Review the merged library before publishing.`
+          : 'Latest library loaded from GitHub.',
+      );
+      setSettings(false);
+      setConfig((c) => ({ ...c, token: '' }));
+    } catch (e) {
+      setSettingsError(msg(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <SidebarProvider>
+      <Sidebar className="library-sidebar" collapsible="offcanvas">
+        <SidebarHeader className="brand-header">
+          <div className="brand-mark">
+            <LibraryBig size={25} />
+          </div>
+          <div>
+            <strong>Dental Library</strong>
+            <span>PERSONAL COLLECTION</span>
+          </div>
+        </SidebarHeader>
+        <SidebarContent>
+          <div className="sidebar-label">WORKSPACE</div>
+          <SidebarMenu className="main-nav">
+            {[
+              {
+                id: 'lectures',
+                label: 'Lecture library',
+                icon: Video,
+                count: data.lectures.length,
+              },
+              {
+                id: 'notes',
+                label: 'Lecture notes',
+                icon: NotebookPen,
+                count: noted,
+              },
+              { id: 'textbooks', label: 'Textbooks', icon: BookOpen, count: 0 },
+            ].map((n) => (
+              <SidebarMenuItem key={n.id}>
+                <SidebarMenuButton
+                  isActive={view === n.id}
+                  onClick={() => nav(n.id)}
+                >
+                  <n.icon size={18} />
+                  <span>{n.label}</span>
+                  <span className="nav-count">
+                    {n.id === 'textbooks' ? 'Later' : fmt(n.count)}
+                  </span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+          <div className="sidebar-label discipline-label">
+            DISCIPLINES <span>{DISCIPLINES.length}</span>
+          </div>
+          <SidebarMenu className="discipline-nav">
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                isActive={!discipline}
+                onClick={() => {
+                  setDiscipline('');
+                  setCourse('');
+                  setView('lectures');
+                }}
+              >
+                <span className="discipline-dot all-dot" />
+                <span>All disciplines</span>
+                <span className="nav-count">{fmt(data.lectures.length)}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            {DISCIPLINES.map((d, i) => (
+              <SidebarMenuItem key={d}>
+                <SidebarMenuButton
+                  isActive={discipline === d}
+                  onClick={() => {
+                    setDiscipline(d);
+                    setCourse('');
+                    setView('lectures');
+                  }}
+                >
+                  <span
+                    className="discipline-dot"
+                    style={{ background: `hsl(${165 + i * 23} 48% 68%)` }}
+                  />
+                  <span>{d}</span>
+                  <span className="nav-count">{fmt(counts.get(d) || 0)}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ))}
+          </SidebarMenu>
+          <div className="sidebar-label discipline-label">EXPLORE TAGS</div>
+          <div className="sidebar-tags">
+            {tags.map(([t]) => (
+              <button
+                key={t}
+                className={tag === t ? 'active' : ''}
+                onClick={() => {
+                  setTag(tag === t ? '' : t);
+                  setView('lectures');
+                }}
+              >
+                # {t}
+              </button>
+            ))}
+          </div>
+        </SidebarContent>
+        <SidebarFooter className="sidebar-footer">
+          <div className="privacy-note">
+            <ShieldCheck size={18} />
+            <div>
+              <strong>Password protected</strong>
+              <span>Share with people you choose</span>
+            </div>
+          </div>
+          <button className="lock-button" onClick={lock}>
+            <LockKeyhole size={16} /> Lock library
+          </button>
+        </SidebarFooter>
+      </Sidebar>
+      <SidebarInset className="library-main">
+        <header className="topbar">
+          <div className="breadcrumb">
+            <SidebarTrigger />
+            <span>Workspace</span>
+            <ChevronRight size={14} />
+            <strong>
+              {view === 'lectures'
+                ? 'Lecture library'
+                : view === 'notes'
+                  ? 'Lecture notes'
+                  : 'Textbooks'}
+            </strong>
+          </div>
+          <div className="topbar-actions">
+            <span className="private-badge">
+              <span /> Private content
+            </span>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setSettingsError('');
+                setSettings(true);
+              }}
+            >
+              <Settings2 size={16} />
+              <span>Library settings</span>
+            </Button>
+          </div>
+        </header>
+        <main className="content-area">
+          <div className="page-heading">
+            <div>
+              <div className="eyebrow">YOUR KNOWLEDGE, CONNECTED</div>
+              <h1>
+                {view === 'lectures'
+                  ? 'Lecture library'
+                  : view === 'notes'
+                    ? 'Lecture notes'
+                    : 'Textbooks'}
+              </h1>
+              <p>
+                {view === 'lectures'
+                  ? 'Find a lecture. Connect an idea. Keep learning.'
+                  : view === 'notes'
+                    ? 'Your observations, linked to the lectures they came from.'
+                    : 'A dedicated home for your reading and reference notes.'}
+              </p>
+            </div>
+            {view === 'lectures' && (
+              <Button
+                className="primary-btn"
+                onClick={addLecture}
+                disabled={busy}
+              >
+                <Plus size={18} /> Add lecture
+              </Button>
+            )}
+          </div>
+          {notice && (
+            <output className="notice">
+              <span>{notice}</span>
+              <button
+                aria-label="Dismiss notification"
+                onClick={() => setNotice('')}
+              >
+                <X size={16} />
+              </button>
+            </output>
+          )}
+          {view === 'textbooks' ? (
+            <section className="future-section">
+              <BookOpen size={44} />
+              <span className="eyebrow">THE NEXT CHAPTER</span>
+              <h2>Your reference shelf</h2>
+              <p>
+                This section is reserved for textbooks and their notes. When
+                you’re ready, books can sit alongside your lectures with the
+                same searchable disciplines and tags.
+              </p>
+              <div className="future-meta">
+                <FolderOpen size={18} />
+                {fmt(data.importSummary?.documents || 0)} documents found in the
+                source folders, ready for later review.
+              </div>
+            </section>
+          ) : (
+            <>
+              <div className="collection-overview">
+                <div className="overview-icon">
+                  <LibraryBig size={26} />
+                </div>
+                <div className="overview-total">
+                  <strong>{fmt(data.lectures.length)}</strong>
+                  <span>lectures in your collection</span>
+                </div>
+                <div className="overview-divider" />
+                <button
+                  onClick={() => {
+                    setStatus('linked');
+                    setView('lectures');
+                  }}
+                >
+                  <span className="stat-dot linked" />
+                  <strong>{fmt(linked)}</strong> YouTube linked
+                </button>
+                <button
+                  onClick={() => {
+                    setStatus('pending');
+                    setView('lectures');
+                  }}
+                >
+                  <span className="stat-dot pending" />
+                  <strong>{fmt(data.lectures.length - linked)}</strong> awaiting
+                  a link
+                </button>
+                <div className="overview-save">
+                  <ShieldCheck size={15} />
+                  <span>{saveStatus}</span>
+                </div>
+              </div>
+              <section className="search-panel">
+                <div className="search-box">
+                  <Search size={20} />
+                  <Input
+                    aria-label="Search lectures, courses, disciplines and tags"
+                    placeholder="Search lectures, courses or #tags…"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                  />
+                  {query && (
+                    <button
+                      aria-label="Clear search"
+                      onClick={() => setQuery('')}
+                    >
+                      <X size={17} />
+                    </button>
+                  )}
+                </div>
+                <div className="filters">
+                  <Choice
+                    label="All courses"
+                    value={course}
+                    onChange={setCourse}
+                    options={[
+                      { value: '', label: 'All courses' },
+                      ...courses.map((c) => ({ value: c, label: c })),
+                    ]}
+                  />
+                  <Choice
+                    label="All sources"
+                    value={source}
+                    onChange={(v) => {
+                      setSource(v);
+                      setCourse('');
+                    }}
+                    options={[
+                      { value: '', label: 'All sources' },
+                      ...sources.map((s) => ({ value: s, label: s })),
+                    ]}
+                  />
+                  <Choice
+                    label="Any link status"
+                    value={status}
+                    onChange={setStatus}
+                    options={[
+                      { value: '', label: 'Any link status' },
+                      { value: 'linked', label: 'YouTube linked' },
+                      { value: 'pending', label: 'Awaiting a link' },
+                      { value: 'review', label: 'Discipline needs review' },
+                    ]}
+                  />
+                  <div className="filter-spacer" />
+                  <Choice
+                    label="Sort by course"
+                    value={sort}
+                    onChange={setSort}
+                    options={[
+                      { value: 'course', label: 'Sort by course' },
+                      { value: 'title', label: 'Title A–Z' },
+                      { value: 'updated', label: 'Recently edited' },
+                    ]}
+                  />
+                </div>
+                {(discipline || tag || query || source || status || course) && (
+                  <div className="active-filters">
+                    {discipline && (
+                      <button
+                        onClick={() => {
+                          setDiscipline('');
+                          setCourse('');
+                        }}
+                      >
+                        {discipline}
+                        <X size={13} />
+                      </button>
+                    )}
+                    {tag && (
+                      <button onClick={() => setTag('')}>
+                        # {tag}
+                        <X size={13} />
+                      </button>
+                    )}
+                    <button className="clear-filters" onClick={clearFilters}>
+                      Clear all filters
+                    </button>
+                  </div>
+                )}
+              </section>
+              <div className="results-heading">
+                <span>
+                  <strong>{fmt(filtered.length)}</strong>{' '}
+                  {view === 'notes' ? 'lecture notes' : 'lectures'}
+                  {discipline && ` in ${discipline}`}
+                </span>
+                <span className="classification-hint">
+                  <span className="tiny-dot" /> Disciplines suggested from
+                  course titles · editable
+                </span>
+              </div>
+              {rows.length ? (
+                <section className="lecture-list" aria-label="Lecture results">
+                  <div className="list-header">
+                    <span>LECTURE & COURSE</span>
+                    <span>DISCIPLINE & TAGS</span>
+                    <span>YOUTUBE</span>
+                  </div>
+                  {rows.map((v, i) => (
+                    <article key={v.id} className="lecture-row">
+                      <div className="lecture-info">
+                        <button
+                          className="play-tile"
+                          aria-label={`Open ${v.title}`}
+                          onClick={() => setEditing(v)}
+                        >
+                          <Play size={19} />
+                          <span>
+                            {String((currentPage - 1) * 30 + i + 1).padStart(
+                              2,
+                              '0',
+                            )}
+                          </span>
+                        </button>
+                        <div className="lecture-copy">
+                          <button
+                            className="lecture-title"
+                            onClick={() => setEditing(v)}
+                          >
+                            {v.title}
+                          </button>
+                          <button
+                            className="course-link"
+                            onClick={() => setCourse(v.course)}
+                          >
+                            {v.course}
+                          </button>
+                          <div className="lecture-meta">
+                            <span>{v.source}</span>
+                            <span>·</span>
+                            <span>{duration(v.duration)}</span>
+                            {v.notes && <NotebookPen size={13} />}
+                          </div>
+                          {view === 'notes' && (
+                            <p className="note-preview">
+                              {v.notes.slice(0, 180)}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                      <div className="lecture-taxonomy">
+                        <button
+                          className="discipline-pill"
+                          onClick={() => {
+                            setDiscipline(v.discipline);
+                            setCourse('');
+                          }}
+                        >
+                          {v.discipline}
+                        </button>
+                        <div className="row-tags">
+                          {v.tags.slice(0, 3).map((t) => (
+                            <button key={t} onClick={() => setTag(t)}>
+                              #{t}
+                            </button>
+                          ))}
+                          {v.tags.length > 3 && (
+                            <span>+{v.tags.length - 3}</span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="lecture-link">
+                        {v.youtubeUrl ? (
+                          <a
+                            className="watch-link"
+                            href={v.youtubeUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            <Play size={14} /> Watch <ExternalLink size={13} />
+                          </a>
+                        ) : (
+                          <button
+                            className="add-link"
+                            onClick={() => setEditing(v)}
+                          >
+                            <Plus size={15} /> Add link
+                          </button>
+                        )}
+                        <button
+                          className="edit-link"
+                          onClick={() => setEditing(v)}
+                        >
+                          Edit details <ChevronRight size={12} />
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </section>
+              ) : (
+                <section className="empty-state">
+                  {view === 'notes' ? (
+                    <NotebookPen size={38} />
+                  ) : (
+                    <Search size={38} />
+                  )}
+                  <h2>
+                    {view === 'notes' && !noted
+                      ? 'Your notes start with a lecture'
+                      : 'No lectures match these filters'}
+                  </h2>
+                  <p>
+                    {view === 'notes' && !noted
+                      ? 'Open a lecture and add your notes. They will appear here, together with their source.'
+                      : 'Try another keyword or clear the filters to see your collection.'}
+                  </p>
+                  <Button
+                    variant="outline"
+                    onClick={() =>
+                      view === 'notes' && !noted
+                        ? nav('lectures')
+                        : clearFilters()
+                    }
+                  >
+                    {view === 'notes' && !noted
+                      ? 'Browse lectures'
+                      : 'Clear filters'}
+                  </Button>
+                </section>
+              )}
+              {filtered.length > 0 && (
+                <div className="pagination-bar">
+                  <span>
+                    Showing {fmt((currentPage - 1) * 30 + 1)}–
+                    {fmt(Math.min(currentPage * 30, filtered.length))} of{' '}
+                    {fmt(filtered.length)}
+                  </span>
+                  <div>
+                    <Button
+                      variant="outline"
+                      aria-label="Previous page"
+                      disabled={currentPage === 1}
+                      onClick={() => setPage(currentPage - 1)}
+                    >
+                      <ChevronLeft size={16} />
+                    </Button>
+                    <span>
+                      {currentPage} / {totalPages}
+                    </span>
+                    <Button
+                      variant="outline"
+                      aria-label="Next page"
+                      disabled={currentPage === totalPages}
+                      onClick={() => setPage(currentPage + 1)}
+                    >
+                      <ChevronRight size={16} />
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+          <footer className="library-footer">
+            <span>
+              <LockKeyhole size={13} /> Your catalogue stays encrypted when
+              stored.
+            </span>
+            <span>
+              Last updated:{' '}
+              {new Date(data.updatedAt).toLocaleDateString('en-AU')}
+            </span>
+          </footer>
+        </main>
+      </SidebarInset>
+      <Dialog
+        open={!!editing}
+        onOpenChange={(open) => {
+          if (!open && !busy) setEditing(null);
+        }}
+      >
+        {editing && (
+          <DialogContent className="lecture-dialog">
+            <LectureEditor
+              key={editing.id}
+              lecture={editing}
+              busy={busy}
+              onSave={saveLecture}
+            />
+          </DialogContent>
+        )}
+      </Dialog>
+      <Dialog
+        open={settings}
+        onOpenChange={(open) => {
+          if (!busy) {
+            setSettings(open);
+            if (!open) setConfig((c) => ({ ...c, token: '' }));
+          }
+        }}
+      >
+        <DialogContent className="settings-dialog">
+          <DialogTitle>Library settings</DialogTitle>
+          <DialogDescription>
+            Save your edits across devices and keep an encrypted backup.
+          </DialogDescription>
+          <section className="settings-section">
+            <h3>
+              <Download size={17} /> Encrypted backups
+            </h3>
+            <p>
+              Backups include lectures, tags, links and notes. The same library
+              password unlocks them.
+            </p>
+            <div className="button-row">
+              <Button variant="outline" disabled={busy} onClick={exportBackup}>
+                <Download size={16} /> Export backup
+              </Button>
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => fileInput.current?.click()}
+              >
+                <FolderOpen size={16} /> Import & merge
+              </Button>
+            </div>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".json"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void importBackup(f);
+              }}
+            />
+          </section>
+          <section className="settings-section">
+            <h3>
+              <CloudUpload size={17} /> Save to GitHub
+            </h3>
+            <p>
+              Edits are saved in this browser first. Publish them here to update
+              the library for everyone with the password.
+            </p>
+            <div className="form-grid">
+              <div>
+                <label htmlFor="repo">Repository</label>
+                <Input
+                  id="repo"
+                  value={config.repo}
+                  onChange={(e) =>
+                    setConfig({ ...config, repo: e.target.value })
+                  }
+                />
+              </div>
+              <div>
+                <label htmlFor="branch">Branch</label>
+                <Input
+                  id="branch"
+                  value={config.branch}
+                  onChange={(e) =>
+                    setConfig({ ...config, branch: e.target.value })
+                  }
+                />
+              </div>
+            </div>
+            <label htmlFor="token">GitHub access token</label>
+            <Input
+              id="token"
+              type="password"
+              autoComplete="off"
+              value={config.token}
+              onChange={(e) => setConfig({ ...config, token: e.target.value })}
+            />
+            <p className="field-help">
+              Use a fine-grained token for this repository with Contents: read
+              and write. It stays only while this panel is open. Sharing the
+              library password allows reading; publishing also requires
+              repository access.
+            </p>
+            {settingsError && (
+              <div className="error" role="alert">
+                {settingsError}
+              </div>
+            )}
+            <div className="button-row">
+              <Button
+                className="primary-btn"
+                disabled={busy || !config.token || !dirty}
+                onClick={publish}
+              >
+                <CloudUpload size={16} />
+                {busy ? 'Working…' : 'Publish changes'}
+              </Button>
+              <Button
+                variant="outline"
+                disabled={busy || !config.token}
+                onClick={loadLatest}
+              >
+                Load & merge latest
+              </Button>
+            </div>
+            <p className="field-help">
+              Merging keeps the newer version of each lecture. Export a backup
+              first if two people have edited the same lecture.
+            </p>
+          </section>
+          <section className="settings-section">
+            <h3>
+              <ShieldCheck size={17} /> Sharing your library
+            </h3>
+            <p>
+              Share the site address and send the password separately. Everyone
+              with the password can read the catalogue and its YouTube links.
+              Video access still depends on each video’s YouTube settings.
+            </p>
+            <p className="field-help">
+              Source files and textbooks are not uploaded by this site. Use the
+              local rescan tool to add newly downloaded lectures.
+            </p>
+          </section>
+        </DialogContent>
+      </Dialog>
+    </SidebarProvider>
+  );
+}
