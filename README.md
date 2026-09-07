@@ -48,6 +48,26 @@ npm run encrypt
 
 The scan tracks source metadata separately from human edits, preserves edited fields and stable IDs, adds new source files and flags missing sources without deleting records. It retains descriptively titled `.ts` recordings and flags possible same-name/size duplicates without merging them. Files modified in the last three minutes, zero-byte files and known undersized downloads are skipped. File presence does not verify playback or completeness when expected size is unknown. The YouTube refresh reads the authenticated channel's current uploads through the official API. Linking then uses the uploader's exact source path and only accepts IDs still present on that channel; manually edited links win.
 
+## Make linked private videos shareable
+
+YouTube private videos cannot play for library readers unless their Google accounts were invited. The visibility helper can change catalogue-linked private videos on the configured channel to **unlisted**, allowing anyone with a library link to play them while keeping them out of normal public channel listings and search.
+
+Start with the read-only audit. It verifies that OAuth is authorised for the configured channel and fetches every linked video's current owner and status directly from YouTube in batches:
+
+```powershell
+npm run youtube:unlisted
+```
+
+The JSON summary reports `ownedPrivateEligible`, the default 100-video `plannedThisRun` batch, and all skipped categories. Details are saved locally in `.private/youtube-unlisted-report.json`. Scheduled private videos and videos with an unfamiliar status field are blocked rather than changed.
+
+Only after reviewing a fresh audit, apply that exact batch by passing its `plannedThisRun` value. For example, if it reports 100:
+
+```powershell
+npm run youtube:unlisted -- --apply --confirm-count 100
+```
+
+Apply mode preserves the video's returned mutable status settings, changes only `privacyStatus`, and records progress after every request. It stops before writing if the live planned count differs from `--confirm-count`. Rerun the audit before each subsequent batch; already-unlisted videos are automatically skipped, so interrupted and quota-limited runs resume safely. Use `--max-updates N` in both commands to choose a smaller cap.
+
 `npm run encrypt` updates `public/library.enc.json` using the existing password and salt with a fresh IV. It does not publish. Import that file into the site to merge it with your browser draft, then publish through Library settings. Do not overwrite the shared catalogue from an outdated local scan.
 
 ## Publish on GitHub Pages
