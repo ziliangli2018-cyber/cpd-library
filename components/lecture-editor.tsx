@@ -34,12 +34,18 @@ export function LectureEditor({
     try {
       const title = draft.title.trim();
       if (!title) throw new Error('Add a lecture title.');
+      const nextYoutubeUrl = youtubeUrl(draft.youtubeUrl);
+      const youtubeChanged = nextYoutubeUrl !== lecture.youtubeUrl;
       await onSave({
         ...draft,
         title,
         course: draft.course.trim() || 'Independent lectures',
         tags: normalizeTags(tags),
-        youtubeUrl: youtubeUrl(draft.youtubeUrl),
+        youtubeUrl: nextYoutubeUrl,
+        youtubeSource: youtubeChanged ? 'manual' : draft.youtubeSource,
+        youtubeUpdatedAt: youtubeChanged
+          ? new Date().toISOString()
+          : draft.youtubeUpdatedAt,
         classificationReviewed: true,
         updatedAt: new Date().toISOString(),
       });

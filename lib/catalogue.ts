@@ -20,6 +20,8 @@ export type Lecture = {
   discipline: string;
   tags: string[];
   youtubeUrl: string;
+  youtubeSource?: 'uploader' | 'manual';
+  youtubeUpdatedAt?: string;
   notes: string;
   source: string;
   relativePath: string;
@@ -183,6 +185,11 @@ export function validateCatalogue(value: unknown): Catalogue {
       !Number.isFinite(Date.parse(v.importedAt)) ||
       (v.sourceUpdatedAt !== undefined &&
         !Number.isFinite(Date.parse(v.sourceUpdatedAt))) ||
+      (v.youtubeSource !== undefined &&
+        v.youtubeSource !== 'uploader' &&
+        v.youtubeSource !== 'manual') ||
+      (v.youtubeUpdatedAt !== undefined &&
+        !Number.isFinite(Date.parse(v.youtubeUpdatedAt))) ||
       typeof v.bytes !== 'number' ||
       !Number.isFinite(v.bytes) ||
       v.bytes < 0 ||

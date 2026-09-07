@@ -41,10 +41,12 @@ The owner's source configuration is `.private/sources.json`, containing a `sourc
 ```powershell
 node scripts/restore-backup.mjs "PATH_TO_LATEST_ENCRYPTED_BACKUP"
 npm run scan
+npm run refresh-youtube
+npm run link-youtube
 npm run encrypt
 ```
 
-The scan tracks source metadata separately from human edits, preserves edited fields and stable IDs, adds new source files and flags missing sources without deleting records. It retains descriptively titled `.ts` recordings and flags possible same-name/size duplicates without merging them. Files modified in the last three minutes, zero-byte files and known undersized downloads are skipped. File presence does not verify playback or completeness when expected size is unknown.
+The scan tracks source metadata separately from human edits, preserves edited fields and stable IDs, adds new source files and flags missing sources without deleting records. It retains descriptively titled `.ts` recordings and flags possible same-name/size duplicates without merging them. Files modified in the last three minutes, zero-byte files and known undersized downloads are skipped. File presence does not verify playback or completeness when expected size is unknown. The YouTube refresh reads the authenticated channel's current uploads through the official API. Linking then uses the uploader's exact source path and only accepts IDs still present on that channel; manually edited links win.
 
 `npm run encrypt` updates `public/library.enc.json` using the existing password and salt with a fresh IV. It does not publish. Import that file into the site to merge it with your browser draft, then publish through Library settings. Do not overwrite the shared catalogue from an outdated local scan.
 

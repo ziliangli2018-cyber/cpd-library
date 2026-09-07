@@ -13,6 +13,8 @@
     "format": "oxfmt",
     "test": "node --test tests/*.test.mjs",
     "scan": "python scripts/import-catalogue.py",
+    "refresh-youtube": "python scripts/refresh-youtube-channel.py",
+    "link-youtube": "python scripts/link-youtube-uploads.py",
     "encrypt": "node scripts/encrypt-library.mjs"
   },
   "dependencies": {
