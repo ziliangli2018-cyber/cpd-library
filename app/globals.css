@@ -635,6 +635,7 @@ p {
   border: 1px solid #e1eaf0;
   border-radius: 7px;
   color: #537b91;
+  text-decoration: none;
 }
 .play-tile span {
   font-size: 10px;
@@ -644,6 +645,14 @@ p {
 .play-tile:hover {
   background: #dcecf5;
   color: #1b617e;
+}
+.linked-play-tile {
+  border-color: #b9dfd3;
+  background: #f3fbf8;
+  color: #28765e;
+}
+.linked-play-tile span {
+  color: #4f8b79;
 }
 .lecture-copy {
   min-width: 0;
@@ -739,6 +748,39 @@ p {
   border-color: #b9dfd3;
   color: #28765e;
   background: #f3fbf8;
+}
+.youtube-privacy {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 150px;
+  font-size: 10px;
+  line-height: 1.35;
+  color: #6c8290;
+}
+.youtube-privacy.private {
+  color: #9a5f31;
+  font-weight: 600;
+}
+.youtube-privacy.unlisted,
+.youtube-privacy.public {
+  color: #39745f;
+}
+.youtube-private-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  padding: 9px 11px;
+  border: 1px solid #efd9bf;
+  border-radius: 6px;
+  background: #fff9f1;
+  color: #8a582e;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.youtube-private-warning svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
 }
 .edit-link {
   display: flex;

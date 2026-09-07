@@ -116,6 +116,11 @@ class LinkYouTubeUploadsTests(unittest.TestCase):
                         'youtubeUnavailableAt': '2026-01-01T00:00:00Z',
                         'updatedAt': '2026-01-01T00:00:00Z',
                     },
+                    {
+                        'id': 'hydrated', 'source': 'Source', 'relativePath': 'hydrated.mp4',
+                        'youtubeUrl': 'https://www.youtube.com/watch?v=GGGGGGGGGGG',
+                        'youtubeSource': 'uploader', 'updatedAt': '2026-01-01T00:00:00Z',
+                    },
                 ],
             }), encoding='utf-8')
             state.write_text(json.dumps({'records': {
@@ -137,13 +142,20 @@ class LinkYouTubeUploadsTests(unittest.TestCase):
                     'video_id': 'DDDDDDDDDDD',
                     'updated_at': '2026-02-01T00:00:00Z',
                 },
+                'hydrated': {
+                    'status': 'uploaded',
+                    'source_path': str(media / 'hydrated.mp4'),
+                    'video_id': 'GGGGGGGGGGG',
+                    'updated_at': '2026-02-01T00:00:00Z',
+                },
             }}), encoding='utf-8')
             channel.write_text(json.dumps({
                 'channel_id': 'CHANNEL',
                 'videos': [
-                    {'video_id': 'DDDDDDDDDDD'},
-                    {'video_id': 'EEEEEEEEEEE'},
-                    {'video_id': 'FFFFFFFFFFF'},
+                    {'video_id': 'DDDDDDDDDDD', 'privacy_status': 'unlisted'},
+                    {'video_id': 'EEEEEEEEEEE', 'privacy_status': 'private'},
+                    {'video_id': 'FFFFFFFFFFF', 'privacy_status': 'public'},
+                    {'video_id': 'GGGGGGGGGGG', 'privacy_status': 'unlisted'},
                 ],
             }), encoding='utf-8')
 
@@ -170,12 +182,15 @@ class LinkYouTubeUploadsTests(unittest.TestCase):
                 'https://www.youtube.com/watch?v=DDDDDDDDDDD',
             )
             self.assertEqual(lectures['replacement']['youtubeStatus'], 'current')
+            self.assertEqual(lectures['replacement']['youtubePrivacy'], 'unlisted')
             self.assertNotIn('youtubeUnavailableAt', lectures['replacement'])
+            self.assertEqual(lectures['hydrated']['youtubeStatus'], 'current')
+            self.assertEqual(lectures['hydrated']['youtubePrivacy'], 'unlisted')
             summary = json.loads(stdout.getvalue())
             self.assertEqual(summary['staleUploaderLinksMarkedUnavailable'], 1)
             self.assertEqual(summary['manualLinksPreserved'], 1)
             self.assertEqual(summary['newLinks'], 1)
-            self.assertEqual(summary['catalogueChanges'], 2)
+            self.assertEqual(summary['catalogueChanges'], 3)
 
 
 if __name__ == '__main__':

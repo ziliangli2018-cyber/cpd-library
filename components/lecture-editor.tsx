@@ -36,19 +36,28 @@ export function LectureEditor({
       if (!title) throw new Error('Add a lecture title.');
       const nextYoutubeUrl = youtubeUrl(draft.youtubeUrl);
       const youtubeChanged = nextYoutubeUrl !== lecture.youtubeUrl;
-      await onSave({
+      const next: Lecture = {
         ...draft,
         title,
         course: draft.course.trim() || 'Independent lectures',
         tags: normalizeTags(tags),
         youtubeUrl: nextYoutubeUrl,
         youtubeSource: youtubeChanged ? 'manual' : draft.youtubeSource,
+        youtubePrivacy: youtubeChanged ? undefined : draft.youtubePrivacy,
+        youtubeStatus: youtubeChanged ? undefined : draft.youtubeStatus,
+        youtubePreviousUrl: youtubeChanged
+          ? undefined
+          : draft.youtubePreviousUrl,
+        youtubeUnavailableAt: youtubeChanged
+          ? undefined
+          : draft.youtubeUnavailableAt,
         youtubeUpdatedAt: youtubeChanged
           ? new Date().toISOString()
           : draft.youtubeUpdatedAt,
         classificationReviewed: true,
         updatedAt: new Date().toISOString(),
-      });
+      };
+      await onSave(next);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save.');
     }
@@ -121,6 +130,13 @@ export function LectureEditor({
         <p className="field-help">
           Leave blank until uploaded. Replace the link whenever needed.
         </p>
+        {draft.youtubeUrl === lecture.youtubeUrl &&
+          draft.youtubePrivacy === 'private' && (
+            <p className="youtube-private-warning" role="note">
+              <LockKeyhole size={14} /> Private on YouTube: only the owner and
+              accounts invited in YouTube can watch this video.
+            </p>
+          )}
         <label htmlFor="lecture-notes">Lecture notes</label>
         <Textarea
           id="lecture-notes"

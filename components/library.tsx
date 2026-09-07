@@ -43,6 +43,7 @@ import { Choice } from '@/components/choice';
 import { LectureEditor, duration } from '@/components/lecture-editor';
 import {
   DISCIPLINES,
+  compareLectures,
   filterLectures,
   mergeCatalogues,
   validateCatalogue,
@@ -89,7 +90,7 @@ export default function Library({
   const [status, setStatus] = useState('');
   const [tag, setTag] = useState('');
   const [course, setCourse] = useState('');
-  const [sort, setSort] = useState('course');
+  const [sort, setSort] = useState('linked');
   const [pagination, setPagination] = useState({ key: '', page: 1 });
   const [editing, setEditing] = useState<Lecture | null>(null);
   const [settings, setSettings] = useState(false);
@@ -156,14 +157,11 @@ export default function Library({
           : data.lectures,
         { query, discipline, source, status, tag, course },
       ).sort((a, b) =>
-        sort === 'updated'
-          ? b.updatedAt.localeCompare(a.updatedAt)
-          : sort === 'title'
-            ? a.title.localeCompare(b.title, undefined, { numeric: true })
-            : a.course.localeCompare(b.course, undefined, { numeric: true }) ||
-              a.relativePath.localeCompare(b.relativePath, undefined, {
-                numeric: true,
-              }),
+        compareLectures(
+          a,
+          b,
+          sort as 'linked' | 'course' | 'title' | 'updated',
+        ),
       ),
     [data, view, query, discipline, source, status, tag, course, sort],
   );
@@ -628,10 +626,11 @@ export default function Library({
                   />
                   <div className="filter-spacer" />
                   <Choice
-                    label="Sort by course"
+                    label="YouTube links first"
                     value={sort}
                     onChange={setSort}
                     options={[
+                      { value: 'linked', label: 'YouTube links first' },
                       { value: 'course', label: 'Sort by course' },
                       { value: 'title', label: 'Title A–Z' },
                       { value: 'updated', label: 'Recently edited' },
@@ -684,19 +683,32 @@ export default function Library({
                   {rows.map((v, i) => (
                     <article key={v.id} className="lecture-row">
                       <div className="lecture-info">
-                        <button
-                          className="play-tile"
-                          aria-label={`Open ${v.title}`}
-                          onClick={() => setEditing(v)}
-                        >
-                          <Play size={19} />
-                          <span>
-                            {String((currentPage - 1) * 30 + i + 1).padStart(
-                              2,
-                              '0',
-                            )}
-                          </span>
-                        </button>
+                        {v.youtubeUrl ? (
+                          <a
+                            className="play-tile linked-play-tile"
+                            href={v.youtubeUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={`Watch ${v.title} on YouTube`}
+                          >
+                            <Play size={19} />
+                            <span>WATCH</span>
+                          </a>
+                        ) : (
+                          <button
+                            className="play-tile"
+                            aria-label={`Edit ${v.title}`}
+                            onClick={() => setEditing(v)}
+                          >
+                            <Plus size={19} />
+                            <span>
+                              {String((currentPage - 1) * 30 + i + 1).padStart(
+                                2,
+                                '0',
+                              )}
+                            </span>
+                          </button>
+                        )}
                         <div className="lecture-copy">
                           <button
                             className="lecture-title"
@@ -761,6 +773,31 @@ export default function Library({
                           >
                             <Plus size={15} /> Add link
                           </button>
+                        )}
+                        {v.youtubeUrl && (
+                          <span
+                            className={`youtube-privacy ${v.youtubePrivacy || 'unknown'}`}
+                            title={
+                              v.youtubePrivacy === 'private'
+                                ? 'Only the owner and accounts invited in YouTube can watch'
+                                : v.youtubePrivacy === 'unlisted'
+                                  ? 'Anyone with the link can watch'
+                                  : v.youtubePrivacy === 'public'
+                                    ? 'Anyone can find and watch this video'
+                                    : 'Refresh YouTube data to check who can watch'
+                            }
+                          >
+                            {v.youtubePrivacy === 'private' && (
+                              <LockKeyhole size={12} />
+                            )}
+                            {v.youtubePrivacy === 'private'
+                              ? 'Private · invited only'
+                              : v.youtubePrivacy === 'unlisted'
+                                ? 'Unlisted · shareable'
+                                : v.youtubePrivacy === 'public'
+                                  ? 'Public'
+                                  : 'Visibility not checked'}
+                          </span>
                         )}
                         <button
                           className="edit-link"

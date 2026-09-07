@@ -43,7 +43,12 @@ def run(config_path, catalogue_path, state_path=None, channel_path=None):
     expected_channel = config.get('youtubeChannelId')
     if expected_channel and channel.get('channel_id') != expected_channel:
         raise RuntimeError('The channel cache belongs to a different YouTube channel.')
-    current_video_ids = {video['video_id'] for video in channel.get('videos', []) if VIDEO_ID.fullmatch(video.get('video_id', ''))}
+    current_videos = {
+        video['video_id']: video
+        for video in channel.get('videos', [])
+        if VIDEO_ID.fullmatch(video.get('video_id', ''))
+    }
+    current_video_ids = set(current_videos)
 
     uploaded = {}
     state_current = 0
@@ -74,23 +79,39 @@ def run(config_path, catalogue_path, state_path=None, channel_path=None):
         record = uploaded.get(normalized(root / Path(relative)))
         if record is not None:
             matched += 1
-            url = f"https://www.youtube.com/watch?v={record['video_id']}"
-            if lecture.get('youtubeSource') == 'manual' and lecture.get('youtubeUrl') != url:
+            video_id = record['video_id']
+            url = f"https://www.youtube.com/watch?v={video_id}"
+            privacy = current_videos[video_id].get('privacy_status')
+            if privacy not in {'private', 'unlisted', 'public'}:
+                privacy = None
+            manual_link = lecture.get('youtubeSource') == 'manual'
+            if manual_link and lecture.get('youtubeUrl') != url:
                 manual_preserved += 1
                 continue
-            if lecture.get('youtubeUrl') == url:
+            url_changed = lecture.get('youtubeUrl') != url
+            metadata_current = (
+                lecture.get('youtubeStatus') == 'current'
+                and lecture.get('youtubePrivacy') == privacy
+                and 'youtubeUnavailableAt' not in lecture
+            )
+            if not url_changed and metadata_current:
                 already_linked += 1
                 continue
             when = record.get('updated_at') or now
             lecture.update(
                 youtubeUrl=url,
-                youtubeSource='uploader',
+                youtubeSource='manual' if manual_link else 'uploader',
                 youtubeStatus='current',
                 youtubeUpdatedAt=when,
                 updatedAt=when,
             )
+            if privacy:
+                lecture['youtubePrivacy'] = privacy
+            else:
+                lecture.pop('youtubePrivacy', None)
             lecture.pop('youtubeUnavailableAt', None)
-            new_links += 1
+            if url_changed:
+                new_links += 1
             changed += 1
             continue
 
@@ -110,6 +131,7 @@ def run(config_path, catalogue_path, state_path=None, channel_path=None):
                 youtubeUpdatedAt=now,
                 updatedAt=now,
             )
+            lecture.pop('youtubePrivacy', None)
             stale_links_marked_unavailable += 1
             changed += 1
 

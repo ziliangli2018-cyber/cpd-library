@@ -22,6 +22,7 @@ export type Lecture = {
   youtubeUrl: string;
   youtubeSource?: 'uploader' | 'manual';
   youtubeStatus?: 'current' | 'unavailable';
+  youtubePrivacy?: 'private' | 'unlisted' | 'public';
   youtubePreviousUrl?: string;
   youtubeUnavailableAt?: string;
   youtubeUpdatedAt?: string;
@@ -194,6 +195,10 @@ export function validateCatalogue(value: unknown): Catalogue {
       (v.youtubeStatus !== undefined &&
         v.youtubeStatus !== 'current' &&
         v.youtubeStatus !== 'unavailable') ||
+      (v.youtubePrivacy !== undefined &&
+        v.youtubePrivacy !== 'private' &&
+        v.youtubePrivacy !== 'unlisted' &&
+        v.youtubePrivacy !== 'public') ||
       (v.youtubePreviousUrl !== undefined &&
         typeof v.youtubePreviousUrl !== 'string') ||
       (v.youtubeUnavailableAt !== undefined &&
@@ -217,6 +222,27 @@ export function validateCatalogue(value: unknown): Catalogue {
     ids.add(v.id);
   }
   return c;
+}
+export type LectureSort = 'linked' | 'course' | 'title' | 'updated';
+export function compareLectures(
+  a: Lecture,
+  b: Lecture,
+  sort: LectureSort,
+): number {
+  if (sort === 'updated') return b.updatedAt.localeCompare(a.updatedAt);
+  if (sort === 'title')
+    return a.title.localeCompare(b.title, undefined, { numeric: true });
+  const byCourse =
+    a.course.localeCompare(b.course, undefined, { numeric: true }) ||
+    a.relativePath.localeCompare(b.relativePath, undefined, { numeric: true });
+  if (sort === 'linked') {
+    const linkRank = (lecture: Lecture) => {
+      if (!lecture.youtubeUrl) return 2;
+      return lecture.youtubePrivacy === 'private' ? 1 : 0;
+    };
+    return linkRank(a) - linkRank(b) || byCourse;
+  }
+  return byCourse;
 }
 export function filterLectures(
   lectures: Lecture[],

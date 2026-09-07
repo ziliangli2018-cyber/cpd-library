@@ -14,6 +14,7 @@ import {
   normalizeTags,
   youtubeUrl,
   filterLectures,
+  compareLectures,
 } from '../lib/catalogue.ts';
 
 import { pushGithub } from '../lib/github.ts';
@@ -94,6 +95,48 @@ test('tag and URL validation supports real video links and rejects malicious lin
       ...catalogue,
       lectures: [{ ...lecture, youtubeUrl: 'javascript:alert(1)' }],
     }),
+  );
+  assert.doesNotThrow(() =>
+    validateCatalogue({
+      ...catalogue,
+      lectures: [
+        {
+          ...lecture,
+          youtubeUrl: 'https://www.youtube.com/watch?v=abcdefghijk',
+          youtubePrivacy: 'unlisted',
+        },
+      ],
+    }),
+  );
+  assert.throws(() =>
+    validateCatalogue({
+      ...catalogue,
+      lectures: [{ ...lecture, youtubePrivacy: 'friends-only' }],
+    }),
+  );
+});
+test('linked-first ordering surfaces shareable videos before private and unlinked lectures', () => {
+  const records = [
+    { ...lecture, id: 'none', title: 'A', youtubeUrl: '' },
+    {
+      ...lecture,
+      id: 'private',
+      title: 'B',
+      youtubeUrl: 'https://www.youtube.com/watch?v=BBBBBBBBBBB',
+      youtubePrivacy: 'private',
+    },
+    {
+      ...lecture,
+      id: 'unlisted',
+      title: 'C',
+      youtubeUrl: 'https://www.youtube.com/watch?v=CCCCCCCCCCC',
+      youtubePrivacy: 'unlisted',
+    },
+  ];
+  records.sort((a, b) => compareLectures(a, b, 'linked'));
+  assert.deepEqual(
+    records.map((record) => record.id),
+    ['unlisted', 'private', 'none'],
   );
 });
 test('search intersects tags, discipline, course and link status without losing titled TS recordings', () => {
