@@ -7,6 +7,7 @@ import re
 from pathlib import Path
 
 VIDEO_ID = re.compile(r'^[A-Za-z0-9_-]{11}$')
+VIDEO_URL_ID = re.compile(r'(?:[?&]v=|youtu\.be/|/(?:shorts|embed|live)/)([A-Za-z0-9_-]{11})(?:[^A-Za-z0-9_-]|$)')
 
 
 def normalized(value):
@@ -21,6 +22,11 @@ def parse_time(value):
         return parsed if parsed.tzinfo else parsed.replace(tzinfo=dt.timezone.utc)
     except ValueError:
         return dt.datetime.min.replace(tzinfo=dt.timezone.utc)
+
+
+def video_id_from_url(value):
+    match = VIDEO_URL_ID.search(str(value or ''))
+    return match.group(1) if match else ''
 
 
 def run(config_path, catalogue_path, state_path=None, channel_path=None):
@@ -56,26 +62,56 @@ def run(config_path, catalogue_path, state_path=None, channel_path=None):
     matched = 0
     already_linked = 0
     manual_preserved = 0
+    stale_links_marked_unavailable = 0
+    new_links = 0
     changed = 0
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
     for lecture in catalogue['lectures']:
         root = roots.get(lecture.get('source'))
         relative = lecture.get('relativePath')
         if root is None or not relative:
             continue
         record = uploaded.get(normalized(root / Path(relative)))
-        if record is None:
+        if record is not None:
+            matched += 1
+            url = f"https://www.youtube.com/watch?v={record['video_id']}"
+            if lecture.get('youtubeSource') == 'manual' and lecture.get('youtubeUrl') != url:
+                manual_preserved += 1
+                continue
+            if lecture.get('youtubeUrl') == url:
+                already_linked += 1
+                continue
+            when = record.get('updated_at') or now
+            lecture.update(
+                youtubeUrl=url,
+                youtubeSource='uploader',
+                youtubeStatus='current',
+                youtubeUpdatedAt=when,
+                updatedAt=when,
+            )
+            lecture.pop('youtubeUnavailableAt', None)
+            new_links += 1
+            changed += 1
             continue
-        matched += 1
-        url = f"https://www.youtube.com/watch?v={record['video_id']}"
-        if lecture.get('youtubeSource') == 'manual' and lecture.get('youtubeUrl') != url:
-            manual_preserved += 1
-            continue
-        if lecture.get('youtubeUrl') == url:
-            already_linked += 1
-            continue
-        when = record.get('updated_at') or dt.datetime.now(dt.timezone.utc).isoformat()
-        lecture.update(youtubeUrl=url, youtubeSource='uploader', youtubeUpdatedAt=when, updatedAt=when)
-        changed += 1
+
+        old_url = lecture.get('youtubeUrl', '')
+        old_video_id = video_id_from_url(old_url)
+        if (
+            lecture.get('youtubeSource') == 'uploader'
+            and old_url
+            and old_video_id
+            and old_video_id not in current_video_ids
+        ):
+            lecture.update(
+                youtubeUrl='',
+                youtubePreviousUrl=old_url,
+                youtubeStatus='unavailable',
+                youtubeUnavailableAt=now,
+                youtubeUpdatedAt=now,
+                updatedAt=now,
+            )
+            stale_links_marked_unavailable += 1
+            changed += 1
 
     if changed:
         catalogue['updatedAt'] = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -87,9 +123,11 @@ def run(config_path, catalogue_path, state_path=None, channel_path=None):
         'currentUploadsInLocalState': state_current,
         'uniqueSourcePaths': len(uploaded),
         'exactCatalogueMatches': matched,
-        'newLinks': changed,
+        'newLinks': new_links,
+        'catalogueChanges': changed,
         'alreadyLinked': already_linked,
         'manualLinksPreserved': manual_preserved,
+        'staleUploaderLinksMarkedUnavailable': stale_links_marked_unavailable,
         'unmatchedCurrentStateRecords': len(uploaded) - matched,
     }))
 

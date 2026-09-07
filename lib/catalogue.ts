@@ -21,6 +21,9 @@ export type Lecture = {
   tags: string[];
   youtubeUrl: string;
   youtubeSource?: 'uploader' | 'manual';
+  youtubeStatus?: 'current' | 'unavailable';
+  youtubePreviousUrl?: string;
+  youtubeUnavailableAt?: string;
   youtubeUpdatedAt?: string;
   notes: string;
   source: string;
@@ -188,6 +191,13 @@ export function validateCatalogue(value: unknown): Catalogue {
       (v.youtubeSource !== undefined &&
         v.youtubeSource !== 'uploader' &&
         v.youtubeSource !== 'manual') ||
+      (v.youtubeStatus !== undefined &&
+        v.youtubeStatus !== 'current' &&
+        v.youtubeStatus !== 'unavailable') ||
+      (v.youtubePreviousUrl !== undefined &&
+        typeof v.youtubePreviousUrl !== 'string') ||
+      (v.youtubeUnavailableAt !== undefined &&
+        !Number.isFinite(Date.parse(v.youtubeUnavailableAt))) ||
       (v.youtubeUpdatedAt !== undefined &&
         !Number.isFinite(Date.parse(v.youtubeUpdatedAt))) ||
       typeof v.bytes !== 'number' ||
