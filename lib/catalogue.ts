@@ -79,7 +79,6 @@ export function setLectureProgress(
         ? normalizedWatchHistory(history)
         : normalizedWatchHistory([...history, timestamp]),
     progressUpdatedAt: timestamp,
-    updatedAt: timestamp,
   };
 }
 

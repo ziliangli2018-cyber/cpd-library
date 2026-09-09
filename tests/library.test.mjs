@@ -155,6 +155,7 @@ test('progress helpers record bounded history without mutating lectures', () => 
   assert.deepEqual(lecture.watchHistory, []);
   assert.equal(started.progressStatus, 'in-progress');
   assert.deepEqual(started.watchHistory, [first]);
+  assert.equal(started.updatedAt, lecture.updatedAt);
 
   const duplicate = recordLectureWatch(started, first);
   assert.deepEqual(duplicate.watchHistory, [first]);
@@ -208,6 +209,29 @@ test('catalogue merges retain watch events and use the latest progress decision'
     '2026-09-09T01:00:00.000Z',
     '2026-09-09T02:00:00.000Z',
   ]);
+});
+test('newer progress merges without reverting newer human edits', () => {
+  const remoteEdit = {
+    ...lecture,
+    notes: 'New notes saved by another person',
+    tags: ['Clear aligners', 'Treatment planning'],
+    updatedAt: '2026-09-09T02:00:00.000Z',
+  };
+  const localWatch = recordLectureWatch(
+    { ...lecture, notes: 'Stale notes' },
+    '2026-09-09T03:00:00.000Z',
+  );
+  const result = mergeCatalogues(
+    { ...catalogue, lectures: [remoteEdit] },
+    { ...catalogue, lectures: [localWatch] },
+  ).catalogue.lectures[0];
+
+  assert.equal(result.notes, remoteEdit.notes);
+  assert.deepEqual(result.tags, remoteEdit.tags);
+  assert.equal(result.updatedAt, remoteEdit.updatedAt);
+  assert.equal(result.progressStatus, 'in-progress');
+  assert.deepEqual(result.watchHistory, ['2026-09-09T03:00:00.000Z']);
+  assert.equal(result.progressUpdatedAt, '2026-09-09T03:00:00.000Z');
 });
 test('linked-first ordering surfaces shareable videos before private and unlinked lectures', () => {
   const records = [
