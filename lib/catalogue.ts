@@ -293,7 +293,8 @@ export function validateCatalogue(value: unknown): Catalogue {
           !Number.isFinite(Date.parse(timestamp)),
       ) ||
       (v.progressUpdatedAt !== undefined &&
-        !Number.isFinite(Date.parse(v.progressUpdatedAt))) ||
+        (typeof v.progressUpdatedAt !== 'string' ||
+          !Number.isFinite(Date.parse(v.progressUpdatedAt)))) ||
       !Number.isFinite(Date.parse(v.updatedAt)) ||
       !Number.isFinite(Date.parse(v.importedAt)) ||
       (v.sourceUpdatedAt !== undefined &&

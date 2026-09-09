@@ -145,6 +145,12 @@ test('old catalogues migrate to safe progress defaults and invalid progress is r
       lectures: [{ ...lecture, watchHistory: ['not-a-date'] }],
     }),
   );
+  assert.throws(() =>
+    validateCatalogue({
+      ...catalogue,
+      lectures: [{ ...lecture, progressUpdatedAt: 0 }],
+    }),
+  );
 });
 test('progress helpers record bounded history without mutating lectures', () => {
   const first = '2026-09-09T01:00:00.000Z';
