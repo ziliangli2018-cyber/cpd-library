@@ -81,6 +81,8 @@ def run(config, output):
                 existing = records.get(record_id)
                 if existing:
                     # All user-edited fields survive rescans. File metadata alone is refreshed.
+                    existing.setdefault('watchHistory', [])
+                    existing.setdefault('progressStatus', 'in-progress' if existing['watchHistory'] else 'unseen')
                     before = (existing.get('bytes'), existing.get('availability'), existing.get('duration'))
                     existing.update(bytes=stat.st_size, availability='Source file found')
                     if row.get('duration_seconds'):
@@ -89,7 +91,7 @@ def run(config, output):
                         existing['sourceUpdatedAt'] = now
                     continue
                 text = f'{course} {module} {title}'
-                records[record_id] = dict(id=record_id, title=title, course=course, module=module, discipline=classify(course, title), tags=[tag for tag, regex in TAG_RULES if re.search(regex, text, re.I)], youtubeUrl='', notes='', source=source['name'], relativePath=relative, duration=row.get('duration_seconds') or None, bytes=stat.st_size, importedAt=now, updatedAt=now, sourceUpdatedAt=now, classificationReviewed=False, availability='Source file found')
+                records[record_id] = dict(id=record_id, title=title, course=course, module=module, discipline=classify(course, title), tags=[tag for tag, regex in TAG_RULES if re.search(regex, text, re.I)], youtubeUrl='', notes='', progressStatus='unseen', watchHistory=[], source=source['name'], relativePath=relative, duration=row.get('duration_seconds') or None, bytes=stat.st_size, importedAt=now, updatedAt=now, sourceUpdatedAt=now, classificationReviewed=False, availability='Source file found')
         sources.append({'name': source['name'], 'count': count})
     for record in records.values():
         if record['id'] not in found and record.get('relativePath') and record.get('availability') != 'Source not confirmed on latest scan':

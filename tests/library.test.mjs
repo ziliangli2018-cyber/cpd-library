@@ -15,6 +15,11 @@ import {
   youtubeUrl,
   filterLectures,
   compareLectures,
+  setLectureProgress,
+  recordLectureWatch,
+  lastWatchedAt,
+  recentlyWatched,
+  MAX_WATCH_HISTORY,
 } from '../lib/catalogue.ts';
 
 import { pushGithub } from '../lib/github.ts';
@@ -29,6 +34,8 @@ const lecture = {
   tags: ['Clear aligners'],
   youtubeUrl: '',
   notes: 'Private sentinel α',
+  progressStatus: 'unseen',
+  watchHistory: [],
   source: 'Test',
   relativePath: 'lesson.ts',
   duration: 600,
@@ -114,6 +121,93 @@ test('tag and URL validation supports real video links and rejects malicious lin
       lectures: [{ ...lecture, youtubePrivacy: 'friends-only' }],
     }),
   );
+});
+test('old catalogues migrate to safe progress defaults and invalid progress is rejected', () => {
+  const legacyLecture = { ...lecture };
+  delete legacyLecture.progressStatus;
+  delete legacyLecture.watchHistory;
+  const migrated = validateCatalogue({
+    ...catalogue,
+    lectures: [legacyLecture],
+  });
+  assert.equal(migrated.lectures[0].progressStatus, 'unseen');
+  assert.deepEqual(migrated.lectures[0].watchHistory, []);
+
+  assert.throws(() =>
+    validateCatalogue({
+      ...catalogue,
+      lectures: [{ ...lecture, progressStatus: 'started' }],
+    }),
+  );
+  assert.throws(() =>
+    validateCatalogue({
+      ...catalogue,
+      lectures: [{ ...lecture, watchHistory: ['not-a-date'] }],
+    }),
+  );
+});
+test('progress helpers record bounded history without mutating lectures', () => {
+  const first = '2026-09-09T01:00:00.000Z';
+  const second = '2026-09-09T02:00:00.000Z';
+  const third = '2026-09-09T03:00:00.000Z';
+  const started = recordLectureWatch(lecture, first);
+  assert.equal(lecture.progressStatus, 'unseen');
+  assert.deepEqual(lecture.watchHistory, []);
+  assert.equal(started.progressStatus, 'in-progress');
+  assert.deepEqual(started.watchHistory, [first]);
+
+  const duplicate = recordLectureWatch(started, first);
+  assert.deepEqual(duplicate.watchHistory, [first]);
+  const completed = setLectureProgress(duplicate, 'seen', second);
+  const replayed = recordLectureWatch(completed, third);
+  assert.equal(replayed.progressStatus, 'seen');
+  assert.deepEqual(replayed.watchHistory, [first, second, third]);
+  assert.equal(lastWatchedAt(replayed), third);
+
+  const reset = setLectureProgress(replayed, 'unseen', '2026-09-09T04:00:00Z');
+  assert.equal(reset.progressStatus, 'unseen');
+  assert.deepEqual(reset.watchHistory, replayed.watchHistory);
+  assert.equal(reset.progressUpdatedAt, '2026-09-09T04:00:00.000Z');
+
+  const fullHistory = Array.from({ length: MAX_WATCH_HISTORY }, (_, index) =>
+    new Date(Date.UTC(2026, 0, 1, 0, index)).toISOString(),
+  );
+  const bounded = recordLectureWatch(
+    { ...lecture, watchHistory: fullHistory },
+    '2026-09-10T00:00:00Z',
+  );
+  assert.equal(bounded.watchHistory.length, MAX_WATCH_HISTORY);
+  assert.equal(bounded.watchHistory.at(-1), '2026-09-10T00:00:00.000Z');
+});
+test('recent history is ordered by the latest watch event', () => {
+  const older = recordLectureWatch(lecture, '2026-09-09T01:00:00Z');
+  const newer = recordLectureWatch(
+    { ...lecture, id: 'newer' },
+    '2026-09-09T03:00:00Z',
+  );
+  const never = { ...lecture, id: 'never' };
+  assert.deepEqual(
+    recentlyWatched([older, never, newer]).map((item) => item.id),
+    ['newer', 'test'],
+  );
+  assert.deepEqual(recentlyWatched([older, newer], 1), [newer]);
+});
+test('catalogue merges retain watch events and use the latest progress decision', () => {
+  const current = recordLectureWatch(lecture, '2026-09-09T01:00:00Z');
+  const incoming = setLectureProgress(
+    { ...lecture, watchHistory: current.watchHistory },
+    'seen',
+    '2026-09-09T02:00:00Z',
+  );
+  const result = mergeCatalogues(
+    { ...catalogue, lectures: [current] },
+    { ...catalogue, lectures: [incoming] },
+  ).catalogue.lectures[0];
+  assert.equal(result.progressStatus, 'seen');
+  assert.deepEqual(result.watchHistory, [
+    '2026-09-09T01:00:00.000Z',
+    '2026-09-09T02:00:00.000Z',
+  ]);
 });
 test('linked-first ordering surfaces shareable videos before private and unlinked lectures', () => {
   const records = [
@@ -220,6 +314,9 @@ test('rescans merge file metadata and document counts without overwriting newer 
   const original = {
     ...lecture,
     notes: 'My newest notes',
+    progressStatus: 'seen',
+    watchHistory: ['2026-09-08T00:30:00.000Z'],
+    progressUpdatedAt: '2026-09-08T00:30:00.000Z',
     updatedAt: '2026-09-08T00:00:00Z',
   };
   const scanned = {
@@ -245,4 +342,8 @@ test('rescans merge file metadata and document counts without overwriting newer 
   assert.equal(result.catalogue.lectures[0].duration, 900);
   assert.equal(result.catalogue.importSummary.documents, 77);
   assert.equal(result.catalogue.lectures[0].updatedAt, original.updatedAt);
+  assert.equal(result.catalogue.lectures[0].progressStatus, 'seen');
+  assert.deepEqual(result.catalogue.lectures[0].watchHistory, [
+    '2026-09-08T00:30:00.000Z',
+  ]);
 });
