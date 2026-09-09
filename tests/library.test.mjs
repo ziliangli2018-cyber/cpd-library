@@ -278,6 +278,14 @@ test('search intersects tags, discipline, course and link status without losing 
     filterLectures([lecture], { ...f, query: 'not present' }).length,
     0,
   );
+  assert.equal(
+    filterLectures([{ ...lecture, course: '  ' }], {
+      ...f,
+      query: '',
+      course: 'Uncategorised course',
+    }).length,
+    1,
+  );
 });
 test('GitHub writes use the original baseline; conflicts and expired tokens preserve remote data', async () => {
   const session = await createSession(password);

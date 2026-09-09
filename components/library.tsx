@@ -8,6 +8,7 @@ import {
   Download,
   ExternalLink,
   FolderOpen,
+  Home,
   LibraryBig,
   LockKeyhole,
   NotebookPen,
@@ -16,7 +17,6 @@ import {
   Search,
   Settings2,
   ShieldCheck,
-  Video,
   X,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
@@ -42,13 +42,23 @@ import {
 import { Choice } from '@/components/choice';
 import { LectureEditor, duration } from '@/components/lecture-editor';
 import {
+  CourseDetail,
+  CourseList,
+  DisciplineOverview,
+  HistorySection,
+} from '@/components/course-browser';
+import {
   DISCIPLINES,
   compareLectures,
   filterLectures,
+  recentlyWatched,
+  recordLectureWatch,
+  setLectureProgress,
   mergeCatalogues,
   validateCatalogue,
   type Catalogue,
   type Lecture,
+  type LectureProgressStatus,
 } from '@/lib/catalogue';
 import {
   fingerprint,
@@ -90,6 +100,7 @@ export default function Library({
   const [status, setStatus] = useState('');
   const [tag, setTag] = useState('');
   const [course, setCourse] = useState('');
+  const [progress, setProgress] = useState('');
   const [sort, setSort] = useState('linked');
   const [pagination, setPagination] = useState({ key: '', page: 1 });
   const [editing, setEditing] = useState<Lecture | null>(null);
@@ -101,6 +112,9 @@ export default function Library({
     token: '',
   });
   const fileInput = useRef<HTMLInputElement>(null);
+  const dataRef = useRef(data);
+  const saveQueue = useRef<Promise<void>>(Promise.resolve());
+  const pendingSaves = useRef(0);
   const filterKey = JSON.stringify([
     query,
     discipline,
@@ -108,6 +122,7 @@ export default function Library({
     status,
     tag,
     course,
+    progress,
     sort,
     view,
   ]);
@@ -127,21 +142,30 @@ export default function Library({
   );
   const linked = data.lectures.filter((v) => v.youtubeUrl).length;
   const noted = data.lectures.filter((v) => v.notes.trim()).length;
-  const courses = useMemo(
-    () =>
-      [
-        ...new Set(
-          data.lectures
-            .filter(
-              (v) =>
-                (!discipline || v.discipline === discipline) &&
-                (!source || v.source === source),
-            )
-            .map((v) => v.course),
-        ),
-      ].sort((a, b) => a.localeCompare(b, undefined, { numeric: true })),
-    [data, discipline, source],
-  );
+  const seen = data.lectures.filter(
+    (lecture) => lecture.progressStatus === 'seen',
+  ).length;
+  const inProgress = data.lectures.filter(
+    (lecture) => lecture.progressStatus === 'in-progress',
+  ).length;
+  const history = useMemo(() => recentlyWatched(data.lectures, 8), [data]);
+  const isFiltering = Boolean(query || source || status || tag || progress);
+  const pageTitle =
+    view === 'notes'
+      ? 'Lecture notes'
+      : view === 'textbooks'
+        ? 'Textbooks'
+        : course || discipline || 'Learning home';
+  const pageDescription =
+    view === 'notes'
+      ? 'Your observations, linked to the lectures they came from.'
+      : view === 'textbooks'
+        ? 'A dedicated home for your reading and reference notes.'
+        : course
+          ? 'Work through the course by module and keep your place as you learn.'
+          : discipline
+            ? 'Choose a course to see its modules and videos.'
+            : 'Pick up where you left off or browse your courses by discipline.';
   const sources = [...new Set(data.lectures.map((v) => v.source))];
   const tags = useMemo(() => {
     const map = new Map<string, number>();
@@ -156,14 +180,27 @@ export default function Library({
           ? data.lectures.filter((v) => v.notes.trim())
           : data.lectures,
         { query, discipline, source, status, tag, course },
-      ).sort((a, b) =>
-        compareLectures(
-          a,
-          b,
-          sort as 'linked' | 'course' | 'title' | 'updated',
+      )
+        .filter((lecture) => !progress || lecture.progressStatus === progress)
+        .sort((a, b) =>
+          compareLectures(
+            a,
+            b,
+            sort as 'linked' | 'course' | 'title' | 'updated',
+          ),
         ),
-      ),
-    [data, view, query, discipline, source, status, tag, course, sort],
+    [
+      data,
+      view,
+      query,
+      discipline,
+      source,
+      status,
+      tag,
+      course,
+      progress,
+      sort,
+    ],
   );
   const totalPages = Math.max(1, Math.ceil(filtered.length / 30));
   const currentPage = Math.min(page, totalPages);
@@ -175,47 +212,104 @@ export default function Library({
     setStatus('');
     setTag('');
     setCourse('');
+    setProgress('');
+  }
+  function clearSearchFilters() {
+    setQuery('');
+    setSource('');
+    setStatus('');
+    setTag('');
+    setProgress('');
   }
   function nav(v: string) {
     setView(v);
+    setSort(v === 'notes' ? 'updated' : 'linked');
     clearFilters();
   }
+  function openDiscipline(nextDiscipline: string) {
+    setView('lectures');
+    setDiscipline(nextDiscipline);
+    setCourse('');
+  }
+  function openCourse(nextDiscipline: string, nextCourse: string) {
+    setView('lectures');
+    setDiscipline(nextDiscipline);
+    setCourse(nextCourse);
+  }
   async function save(next: Catalogue) {
+    dataRef.current = next;
+    pendingSaves.current += 1;
     setBusy(true);
     setData(next);
     setDirty(true);
     setSaveStatus('Saving encrypted draft…');
-    try {
-      await writeDraft({
-        envelope: await seal(next, initial.session),
-        baseline,
-        dirty: true,
+    const operation = saveQueue.current
+      .catch(() => undefined)
+      .then(async () => {
+        await writeDraft({
+          envelope: await seal(next, initial.session),
+          baseline,
+          dirty: true,
+        });
       });
-      setSaveStatus('Encrypted draft saved in this browser');
+    saveQueue.current = operation;
+    let saved = false;
+    try {
+      await operation;
+      saved = true;
     } catch (e) {
       setSaveStatus('Changes in memory only');
       setNotice(msg(e));
     } finally {
-      setBusy(false);
+      pendingSaves.current -= 1;
+      if (pendingSaves.current === 0) {
+        setBusy(false);
+        if (saved) setSaveStatus('Encrypted draft saved in this browser');
+      }
     }
   }
   async function saveLecture(v: Lecture) {
-    const exists = data.lectures.some((x) => x.id === v.id);
+    const current = dataRef.current;
+    const exists = current.lectures.some((x) => x.id === v.id);
     await save({
-      ...data,
+      ...current,
       updatedAt: new Date().toISOString(),
       lectures: exists
-        ? data.lectures.map((x) => (x.id === v.id ? v : x))
-        : [v, ...data.lectures],
+        ? current.lectures.map((x) => (x.id === v.id ? v : x))
+        : [v, ...current.lectures],
     });
     setEditing(null);
+  }
+  async function updateLecture(v: Lecture) {
+    const current = dataRef.current;
+    await save({
+      ...current,
+      updatedAt: new Date().toISOString(),
+      lectures: current.lectures.map((lecture) =>
+        lecture.id === v.id ? v : lecture,
+      ),
+    });
+  }
+  function updateProgress(lecture: Lecture, nextStatus: LectureProgressStatus) {
+    const current =
+      dataRef.current.lectures.find((item) => item.id === lecture.id) ||
+      lecture;
+    void updateLecture(
+      setLectureProgress(current, nextStatus, new Date().toISOString()),
+    );
+  }
+  function recordWatch(lecture: Lecture) {
+    const current =
+      dataRef.current.lectures.find((item) => item.id === lecture.id) ||
+      lecture;
+    void updateLecture(recordLectureWatch(current, new Date().toISOString()));
   }
   function addLecture() {
     const now = new Date().toISOString();
     setEditing({
       id: crypto.randomUUID(),
       title: '',
-      course: '',
+      course,
       module: '',
       discipline: discipline || 'General dentistry',
       tags: [],
@@ -229,6 +323,8 @@ export default function Library({
       updatedAt: now,
       classificationReviewed: true,
       availability: 'Added manually',
+      progressStatus: 'unseen',
+      watchHistory: [],
     });
   }
   async function exportBackup() {
@@ -260,7 +356,10 @@ export default function Library({
       const imported = validateCatalogue(
         await openWithSession(JSON.parse(await file.text()), initial.session),
       );
-      const { catalogue: merged, changes } = mergeCatalogues(data, imported);
+      const { catalogue: merged, changes } = mergeCatalogues(
+        dataRef.current,
+        imported,
+      );
       await save(merged);
       setNotice(
         `Merged ${fmt(changes)} updates. Newer edits and source scan information were retained.`,
@@ -278,7 +377,7 @@ export default function Library({
     setBusy(true);
     setSettingsError('');
     try {
-      const envelope = await seal(data, initial.session);
+      const envelope = await seal(dataRef.current, initial.session);
       await pushGithub(config, envelope, baseline);
       const nextBaseline = await fingerprint(envelope);
       setBaseline(nextBaseline);
@@ -313,7 +412,7 @@ export default function Library({
       );
       const nextBaseline = await fingerprint(remote.envelope);
       const { catalogue: next, changes: wins } = dirty
-        ? mergeCatalogues(latest, data)
+        ? mergeCatalogues(latest, dataRef.current)
         : { catalogue: latest, changes: 0 };
       await writeDraft({
         envelope: await seal(next, initial.session),
@@ -321,6 +420,7 @@ export default function Library({
         dirty: wins > 0,
       });
       setData(next);
+      dataRef.current = next;
       setBaseline(nextBaseline);
       setDirty(wins > 0);
       setSaveStatus(
@@ -359,8 +459,8 @@ export default function Library({
             {[
               {
                 id: 'lectures',
-                label: 'Lecture library',
-                icon: Video,
+                label: 'Learning home',
+                icon: Home,
                 count: data.lectures.length,
               },
               {
@@ -374,6 +474,7 @@ export default function Library({
               <SidebarMenuItem key={n.id}>
                 <SidebarMenuButton
                   isActive={view === n.id}
+                  aria-current={view === n.id ? 'page' : undefined}
                   onClick={() => nav(n.id)}
                 >
                   <n.icon size={18} />
@@ -391,7 +492,10 @@ export default function Library({
           <SidebarMenu className="discipline-nav">
             <SidebarMenuItem>
               <SidebarMenuButton
-                isActive={!discipline}
+                isActive={view === 'lectures' && !discipline}
+                aria-current={
+                  view === 'lectures' && !discipline ? 'page' : undefined
+                }
                 onClick={() => {
                   setDiscipline('');
                   setCourse('');
@@ -406,12 +510,11 @@ export default function Library({
             {DISCIPLINES.map((d, i) => (
               <SidebarMenuItem key={d}>
                 <SidebarMenuButton
-                  isActive={discipline === d}
-                  onClick={() => {
-                    setDiscipline(d);
-                    setCourse('');
-                    setView('lectures');
-                  }}
+                  isActive={view === 'lectures' && discipline === d}
+                  aria-current={
+                    view === 'lectures' && discipline === d ? 'page' : undefined
+                  }
+                  onClick={() => openDiscipline(d)}
                 >
                   <span
                     className="discipline-dot"
@@ -429,6 +532,7 @@ export default function Library({
               <button
                 key={t}
                 className={tag === t ? 'active' : ''}
+                aria-pressed={tag === t}
                 onClick={() => {
                   setTag(tag === t ? '' : t);
                   setView('lectures');
@@ -454,18 +558,34 @@ export default function Library({
       </Sidebar>
       <SidebarInset className="library-main">
         <header className="topbar">
-          <div className="breadcrumb">
+          <nav className="breadcrumb" aria-label="Breadcrumb">
             <SidebarTrigger />
-            <span>Workspace</span>
-            <ChevronRight size={14} />
-            <strong>
-              {view === 'lectures'
-                ? 'Lecture library'
-                : view === 'notes'
-                  ? 'Lecture notes'
-                  : 'Textbooks'}
-            </strong>
-          </div>
+            {view === 'lectures' ? (
+              <>
+                <button onClick={() => nav('lectures')}>Home</button>
+                {discipline && (
+                  <>
+                    <ChevronRight size={14} />
+                    <button onClick={() => openDiscipline(discipline)}>
+                      {discipline}
+                    </button>
+                  </>
+                )}
+                {course && (
+                  <>
+                    <ChevronRight size={14} />
+                    <strong>{course}</strong>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                <span>Workspace</span>
+                <ChevronRight size={14} />
+                <strong>{pageTitle}</strong>
+              </>
+            )}
+          </nav>
           <div className="topbar-actions">
             <span className="private-badge">
               <span /> Private content
@@ -482,24 +602,12 @@ export default function Library({
             </Button>
           </div>
         </header>
-        <main className="content-area">
+        <div className="content-area">
           <div className="page-heading">
             <div>
               <div className="eyebrow">YOUR KNOWLEDGE, CONNECTED</div>
-              <h1>
-                {view === 'lectures'
-                  ? 'Lecture library'
-                  : view === 'notes'
-                    ? 'Lecture notes'
-                    : 'Textbooks'}
-              </h1>
-              <p>
-                {view === 'lectures'
-                  ? 'Find a lecture. Connect an idea. Keep learning.'
-                  : view === 'notes'
-                    ? 'Your observations, linked to the lectures they came from.'
-                    : 'A dedicated home for your reading and reference notes.'}
-              </p>
+              <h1>{pageTitle}</h1>
+              <p>{pageDescription}</p>
             </div>
             {view === 'lectures' && (
               <Button
@@ -551,22 +659,33 @@ export default function Library({
                 <div className="overview-divider" />
                 <button
                   onClick={() => {
+                    clearFilters();
+                    setProgress('in-progress');
+                    setView('lectures');
+                  }}
+                >
+                  <span className="stat-dot in-progress" />
+                  <strong>{fmt(inProgress)}</strong> in progress
+                </button>
+                <button
+                  onClick={() => {
+                    clearFilters();
+                    setProgress('seen');
+                    setView('lectures');
+                  }}
+                >
+                  <span className="stat-dot seen" />
+                  <strong>{fmt(seen)}</strong> seen
+                </button>
+                <button
+                  onClick={() => {
+                    clearFilters();
                     setStatus('linked');
                     setView('lectures');
                   }}
                 >
                   <span className="stat-dot linked" />
                   <strong>{fmt(linked)}</strong> YouTube linked
-                </button>
-                <button
-                  onClick={() => {
-                    setStatus('pending');
-                    setView('lectures');
-                  }}
-                >
-                  <span className="stat-dot pending" />
-                  <strong>{fmt(data.lectures.length - linked)}</strong> awaiting
-                  a link
                 </button>
                 <div className="overview-save">
                   <ShieldCheck size={15} />
@@ -593,21 +712,9 @@ export default function Library({
                 </div>
                 <div className="filters">
                   <Choice
-                    label="All courses"
-                    value={course}
-                    onChange={setCourse}
-                    options={[
-                      { value: '', label: 'All courses' },
-                      ...courses.map((c) => ({ value: c, label: c })),
-                    ]}
-                  />
-                  <Choice
                     label="All sources"
                     value={source}
-                    onChange={(v) => {
-                      setSource(v);
-                      setCourse('');
-                    }}
+                    onChange={setSource}
                     options={[
                       { value: '', label: 'All sources' },
                       ...sources.map((s) => ({ value: s, label: s })),
@@ -624,251 +731,318 @@ export default function Library({
                       { value: 'review', label: 'Discipline needs review' },
                     ]}
                   />
-                  <div className="filter-spacer" />
                   <Choice
-                    label="YouTube links first"
-                    value={sort}
-                    onChange={setSort}
+                    label="Any learning status"
+                    value={progress}
+                    onChange={setProgress}
                     options={[
-                      { value: 'linked', label: 'YouTube links first' },
-                      { value: 'course', label: 'Sort by course' },
-                      { value: 'title', label: 'Title A–Z' },
-                      { value: 'updated', label: 'Recently edited' },
+                      { value: '', label: 'Any learning status' },
+                      { value: 'unseen', label: 'Unseen' },
+                      { value: 'in-progress', label: 'In progress' },
+                      { value: 'seen', label: 'Seen' },
                     ]}
                   />
+                  <div className="filter-spacer" />
+                  {view === 'notes' && (
+                    <Choice
+                      label="Recently edited"
+                      value={sort}
+                      onChange={setSort}
+                      options={[
+                        { value: 'updated', label: 'Recently edited' },
+                        { value: 'course', label: 'Sort by course' },
+                        { value: 'title', label: 'Title A–Z' },
+                      ]}
+                    />
+                  )}
                 </div>
-                {(discipline || tag || query || source || status || course) && (
+                {isFiltering && (
                   <div className="active-filters">
-                    {discipline && (
-                      <button
-                        onClick={() => {
-                          setDiscipline('');
-                          setCourse('');
-                        }}
-                      >
-                        {discipline}
-                        <X size={13} />
-                      </button>
-                    )}
                     {tag && (
                       <button onClick={() => setTag('')}>
                         # {tag}
                         <X size={13} />
                       </button>
                     )}
-                    <button className="clear-filters" onClick={clearFilters}>
-                      Clear all filters
+                    {progress && (
+                      <button onClick={() => setProgress('')}>
+                        {progress === 'in-progress' ? 'In progress' : progress}
+                        <X size={13} />
+                      </button>
+                    )}
+                    <button
+                      className="clear-filters"
+                      onClick={clearSearchFilters}
+                    >
+                      Clear search and filters
                     </button>
                   </div>
                 )}
               </section>
-              <div className="results-heading">
-                <span>
-                  <strong>{fmt(filtered.length)}</strong>{' '}
-                  {view === 'notes' ? 'lecture notes' : 'lectures'}
-                  {discipline && ` in ${discipline}`}
-                </span>
-                <span className="classification-hint">
-                  <span className="tiny-dot" /> Disciplines suggested from
-                  course titles · editable
-                </span>
-              </div>
-              {rows.length ? (
-                <section className="lecture-list" aria-label="Lecture results">
-                  <div className="list-header">
-                    <span>LECTURE & COURSE</span>
-                    <span>DISCIPLINE & TAGS</span>
-                    <span>YOUTUBE</span>
-                  </div>
-                  {rows.map((v, i) => (
-                    <article key={v.id} className="lecture-row">
-                      <div className="lecture-info">
-                        {v.youtubeUrl ? (
-                          <a
-                            className="play-tile linked-play-tile"
-                            href={v.youtubeUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            aria-label={`Watch ${v.title} on YouTube`}
-                          >
-                            <Play size={19} />
-                            <span>WATCH</span>
-                          </a>
-                        ) : (
-                          <button
-                            className="play-tile"
-                            aria-label={`Edit ${v.title}`}
-                            onClick={() => setEditing(v)}
-                          >
-                            <Plus size={19} />
-                            <span>
-                              {String((currentPage - 1) * 30 + i + 1).padStart(
-                                2,
-                                '0',
-                              )}
-                            </span>
-                          </button>
-                        )}
-                        <div className="lecture-copy">
-                          <button
-                            className="lecture-title"
-                            onClick={() => setEditing(v)}
-                          >
-                            {v.title}
-                          </button>
-                          <button
-                            className="course-link"
-                            onClick={() => setCourse(v.course)}
-                          >
-                            {v.course}
-                          </button>
-                          <div className="lecture-meta">
-                            <span>{v.source}</span>
-                            <span>·</span>
-                            <span>{duration(v.duration)}</span>
-                            {v.notes && <NotebookPen size={13} />}
-                          </div>
-                          {view === 'notes' && (
-                            <p className="note-preview">
-                              {v.notes.slice(0, 180)}
-                            </p>
-                          )}
-                        </div>
-                      </div>
-                      <div className="lecture-taxonomy">
-                        <button
-                          className="discipline-pill"
-                          onClick={() => {
-                            setDiscipline(v.discipline);
-                            setCourse('');
-                          }}
-                        >
-                          {v.discipline}
-                        </button>
-                        <div className="row-tags">
-                          {v.tags.slice(0, 3).map((t) => (
-                            <button key={t} onClick={() => setTag(t)}>
-                              #{t}
-                            </button>
-                          ))}
-                          {v.tags.length > 3 && (
-                            <span>+{v.tags.length - 3}</span>
-                          )}
-                        </div>
-                      </div>
-                      <div className="lecture-link">
-                        {v.youtubeUrl ? (
-                          <a
-                            className="watch-link"
-                            href={v.youtubeUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            <Play size={14} /> Watch <ExternalLink size={13} />
-                          </a>
-                        ) : (
-                          <button
-                            className="add-link"
-                            onClick={() => setEditing(v)}
-                          >
-                            <Plus size={15} /> Add link
-                          </button>
-                        )}
-                        {v.youtubeUrl && (
-                          <span
-                            className={`youtube-privacy ${v.youtubePrivacy || 'unknown'}`}
-                            title={
-                              v.youtubePrivacy === 'private'
-                                ? 'Only the owner and accounts invited in YouTube can watch'
-                                : v.youtubePrivacy === 'unlisted'
-                                  ? 'Anyone with the link can watch'
-                                  : v.youtubePrivacy === 'public'
-                                    ? 'Anyone can find and watch this video'
-                                    : 'Refresh YouTube data to check who can watch'
-                            }
-                          >
-                            {v.youtubePrivacy === 'private' && (
-                              <LockKeyhole size={12} />
-                            )}
-                            {v.youtubePrivacy === 'private'
-                              ? 'Private · invited only'
-                              : v.youtubePrivacy === 'unlisted'
-                                ? 'Unlisted · shareable'
-                                : v.youtubePrivacy === 'public'
-                                  ? 'Public'
-                                  : 'Visibility not checked'}
-                          </span>
-                        )}
-                        <button
-                          className="edit-link"
-                          onClick={() => setEditing(v)}
-                        >
-                          Edit details <ChevronRight size={12} />
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                </section>
-              ) : (
-                <section className="empty-state">
-                  {view === 'notes' ? (
-                    <NotebookPen size={38} />
-                  ) : (
-                    <Search size={38} />
-                  )}
-                  <h2>
-                    {view === 'notes' && !noted
-                      ? 'Your notes start with a lecture'
-                      : 'No lectures match these filters'}
-                  </h2>
-                  <p>
-                    {view === 'notes' && !noted
-                      ? 'Open a lecture and add your notes. They will appear here, together with their source.'
-                      : 'Try another keyword or clear the filters to see your collection.'}
-                  </p>
-                  <Button
-                    variant="outline"
-                    onClick={() =>
-                      view === 'notes' && !noted
-                        ? nav('lectures')
-                        : clearFilters()
-                    }
-                  >
-                    {view === 'notes' && !noted
-                      ? 'Browse lectures'
-                      : 'Clear filters'}
-                  </Button>
-                </section>
-              )}
-              {filtered.length > 0 && (
-                <div className="pagination-bar">
-                  <span>
-                    Showing {fmt((currentPage - 1) * 30 + 1)}–
-                    {fmt(Math.min(currentPage * 30, filtered.length))} of{' '}
-                    {fmt(filtered.length)}
-                  </span>
-                  <div>
-                    <Button
-                      variant="outline"
-                      aria-label="Previous page"
-                      disabled={currentPage === 1}
-                      onClick={() => setPage(currentPage - 1)}
-                    >
-                      <ChevronLeft size={16} />
-                    </Button>
+              {view === 'lectures' &&
+                (course ? (
+                  <CourseDetail
+                    lectures={filtered}
+                    allLectures={data.lectures}
+                    discipline={discipline}
+                    course={course}
+                    busy={busy}
+                    filtering={isFiltering}
+                    onEdit={setEditing}
+                    onWatch={recordWatch}
+                    onProgress={updateProgress}
+                    onTag={setTag}
+                    onClearFilters={clearSearchFilters}
+                  />
+                ) : discipline || isFiltering ? (
+                  <CourseList
+                    lectures={filtered}
+                    allLectures={data.lectures}
+                    discipline={discipline}
+                    filtering={isFiltering}
+                    onOpen={openCourse}
+                    onClearFilters={clearSearchFilters}
+                  />
+                ) : (
+                  <>
+                    <HistorySection
+                      lectures={history}
+                      busy={busy}
+                      onOpenCourse={(nextDiscipline, nextCourse) => {
+                        clearSearchFilters();
+                        openCourse(nextDiscipline, nextCourse);
+                      }}
+                      onEdit={setEditing}
+                      onWatch={recordWatch}
+                      onProgress={updateProgress}
+                    />
+                    <DisciplineOverview
+                      lectures={data.lectures}
+                      onOpen={(nextDiscipline) => {
+                        clearSearchFilters();
+                        openDiscipline(nextDiscipline);
+                      }}
+                    />
+                  </>
+                ))}
+              {view === 'notes' && (
+                <>
+                  <div className="results-heading">
                     <span>
-                      {currentPage} / {totalPages}
+                      <strong>{fmt(filtered.length)}</strong>{' '}
+                      {view === 'notes' ? 'lecture notes' : 'lectures'}
+                      {discipline && ` in ${discipline}`}
                     </span>
-                    <Button
-                      variant="outline"
-                      aria-label="Next page"
-                      disabled={currentPage === totalPages}
-                      onClick={() => setPage(currentPage + 1)}
-                    >
-                      <ChevronRight size={16} />
-                    </Button>
+                    <span className="classification-hint">
+                      <span className="tiny-dot" /> Disciplines suggested from
+                      course titles · editable
+                    </span>
                   </div>
-                </div>
+                  {rows.length ? (
+                    <section
+                      className="lecture-list"
+                      aria-label="Lecture results"
+                    >
+                      <div className="list-header">
+                        <span>LECTURE & COURSE</span>
+                        <span>DISCIPLINE & TAGS</span>
+                        <span>YOUTUBE</span>
+                      </div>
+                      {rows.map((v, i) => (
+                        <article key={v.id} className="lecture-row">
+                          <div className="lecture-info">
+                            {v.youtubeUrl ? (
+                              <a
+                                className="play-tile linked-play-tile"
+                                href={v.youtubeUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                aria-label={`Watch ${v.title} on YouTube`}
+                                onClick={() => recordWatch(v)}
+                              >
+                                <Play size={19} />
+                                <span>WATCH</span>
+                              </a>
+                            ) : (
+                              <button
+                                className="play-tile"
+                                aria-label={`Edit ${v.title}`}
+                                onClick={() => setEditing(v)}
+                              >
+                                <Plus size={19} />
+                                <span>
+                                  {String(
+                                    (currentPage - 1) * 30 + i + 1,
+                                  ).padStart(2, '0')}
+                                </span>
+                              </button>
+                            )}
+                            <div className="lecture-copy">
+                              <button
+                                className="lecture-title"
+                                onClick={() => setEditing(v)}
+                              >
+                                {v.title}
+                              </button>
+                              <button
+                                className="course-link"
+                                onClick={() =>
+                                  openCourse(v.discipline, v.course)
+                                }
+                              >
+                                {v.course}
+                              </button>
+                              <div className="lecture-meta">
+                                <span>{v.source}</span>
+                                <span>·</span>
+                                <span>{duration(v.duration)}</span>
+                                {v.notes && <NotebookPen size={13} />}
+                              </div>
+                              {view === 'notes' && (
+                                <p className="note-preview">
+                                  {v.notes.slice(0, 180)}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          <div className="lecture-taxonomy">
+                            <button
+                              className="discipline-pill"
+                              onClick={() => {
+                                setDiscipline(v.discipline);
+                                setCourse('');
+                              }}
+                            >
+                              {v.discipline}
+                            </button>
+                            <div className="row-tags">
+                              {v.tags.slice(0, 3).map((t) => (
+                                <button key={t} onClick={() => setTag(t)}>
+                                  #{t}
+                                </button>
+                              ))}
+                              {v.tags.length > 3 && (
+                                <span>+{v.tags.length - 3}</span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="lecture-link">
+                            {v.youtubeUrl ? (
+                              <a
+                                className="watch-link"
+                                href={v.youtubeUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                onClick={() => recordWatch(v)}
+                              >
+                                <Play size={14} /> Watch{' '}
+                                <ExternalLink size={13} />
+                              </a>
+                            ) : (
+                              <button
+                                className="add-link"
+                                onClick={() => setEditing(v)}
+                              >
+                                <Plus size={15} /> Add link
+                              </button>
+                            )}
+                            {v.youtubeUrl && (
+                              <span
+                                className={`youtube-privacy ${v.youtubePrivacy || 'unknown'}`}
+                                title={
+                                  v.youtubePrivacy === 'private'
+                                    ? 'Only the owner and accounts invited in YouTube can watch'
+                                    : v.youtubePrivacy === 'unlisted'
+                                      ? 'Anyone with the link can watch'
+                                      : v.youtubePrivacy === 'public'
+                                        ? 'Anyone can find and watch this video'
+                                        : 'Refresh YouTube data to check who can watch'
+                                }
+                              >
+                                {v.youtubePrivacy === 'private' && (
+                                  <LockKeyhole size={12} />
+                                )}
+                                {v.youtubePrivacy === 'private'
+                                  ? 'Private · invited only'
+                                  : v.youtubePrivacy === 'unlisted'
+                                    ? 'Unlisted · shareable'
+                                    : v.youtubePrivacy === 'public'
+                                      ? 'Public'
+                                      : 'Visibility not checked'}
+                              </span>
+                            )}
+                            <button
+                              className="edit-link"
+                              onClick={() => setEditing(v)}
+                            >
+                              Edit details <ChevronRight size={12} />
+                            </button>
+                          </div>
+                        </article>
+                      ))}
+                    </section>
+                  ) : (
+                    <section className="empty-state">
+                      {view === 'notes' ? (
+                        <NotebookPen size={38} />
+                      ) : (
+                        <Search size={38} />
+                      )}
+                      <h2>
+                        {view === 'notes' && !noted
+                          ? 'Your notes start with a lecture'
+                          : 'No lectures match these filters'}
+                      </h2>
+                      <p>
+                        {view === 'notes' && !noted
+                          ? 'Open a lecture and add your notes. They will appear here, together with their source.'
+                          : 'Try another keyword or clear the filters to see your collection.'}
+                      </p>
+                      <Button
+                        variant="outline"
+                        onClick={() =>
+                          view === 'notes' && !noted
+                            ? nav('lectures')
+                            : clearFilters()
+                        }
+                      >
+                        {view === 'notes' && !noted
+                          ? 'Browse lectures'
+                          : 'Clear filters'}
+                      </Button>
+                    </section>
+                  )}
+                  {filtered.length > 0 && (
+                    <div className="pagination-bar">
+                      <span>
+                        Showing {fmt((currentPage - 1) * 30 + 1)}–
+                        {fmt(Math.min(currentPage * 30, filtered.length))} of{' '}
+                        {fmt(filtered.length)}
+                      </span>
+                      <div>
+                        <Button
+                          variant="outline"
+                          aria-label="Previous page"
+                          disabled={currentPage === 1}
+                          onClick={() => setPage(currentPage - 1)}
+                        >
+                          <ChevronLeft size={16} />
+                        </Button>
+                        <span>
+                          {currentPage} / {totalPages}
+                        </span>
+                        <Button
+                          variant="outline"
+                          aria-label="Next page"
+                          disabled={currentPage === totalPages}
+                          onClick={() => setPage(currentPage + 1)}
+                        >
+                          <ChevronRight size={16} />
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
             </>
           )}
@@ -882,7 +1056,7 @@ export default function Library({
               {new Date(data.updatedAt).toLocaleDateString('en-AU')}
             </span>
           </footer>
-        </main>
+        </div>
       </SidebarInset>
       <Dialog
         open={!!editing}
@@ -920,8 +1094,8 @@ export default function Library({
               <Download size={17} /> Encrypted backups
             </h3>
             <p>
-              Backups include lectures, tags, links and notes. The same library
-              password unlocks them.
+              Backups include lectures, tags, links, notes, learning progress
+              and watch history. The same library password unlocks them.
             </p>
             <div className="button-row">
               <Button variant="outline" disabled={busy} onClick={exportBackup}>

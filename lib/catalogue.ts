@@ -14,6 +14,11 @@ export const DISCIPLINES = [
 ] as const;
 export const MAX_WATCH_HISTORY = 50;
 export type LectureProgressStatus = 'unseen' | 'in-progress' | 'seen';
+
+export function courseLabel(value: string): string {
+  return value.trim() || 'Uncategorised course';
+}
+
 export type Lecture = {
   id: string;
   title: string;
@@ -378,7 +383,7 @@ export function filterLectures(
     (v) =>
       (!filters.discipline || v.discipline === filters.discipline) &&
       (!filters.source || v.source === filters.source) &&
-      (!filters.course || v.course === filters.course) &&
+      (!filters.course || courseLabel(v.course) === filters.course) &&
       (!filters.tag ||
         v.tags.some((t) => t.toLowerCase() === filters.tag.toLowerCase())) &&
       (filters.status !== 'linked' || !!v.youtubeUrl) &&
