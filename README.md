@@ -5,15 +5,17 @@ A static, password-encrypted dental CPD catalogue designed for GitHub Pages. Vid
 ## Use the library
 
 1. Open the site and enter the library password. The initial password is stored **only on the owner's computer** in `.private/library-password.txt`.
-2. Search titles, courses, disciplines and tags. Combine search with discipline, course, source and YouTube-link filters.
-3. Open a lecture to edit its title, main discipline, comma-separated tags, YouTube URL and notes. Notes also appear in their own section.
-4. **Save lecture** stores an encrypted draft in that browser. **Library settings → Publish changes** saves the encrypted catalogue to GitHub for other devices and readers.
-5. Use **Export backup** regularly. Backups are encrypted and require the same password. Import merges records by ID and keeps the more recently edited record.
-6. The textbook section is reserved for a later expansion. Source PDFs and other documents have been counted but have not been imported or uploaded.
+2. The Home page groups the library by discipline and shows recently watched videos. Open a discipline to see its courses, then open a course to see its videos. Courses with several modules use collapsible module sections; courses without meaningful module divisions show one direct video list.
+3. Mark each video **Unseen**, **In progress** or **Seen**. Opening a video records it in watch history and moves an unseen video to in progress; opening a completed video leaves it seen.
+4. Search titles, courses, disciplines and tags. Combine search with discipline, course, source and YouTube-link filters when you need to find an individual video directly.
+5. Open a lecture to edit its title, main discipline, comma-separated tags, YouTube URL and notes. Notes also appear in their own section.
+6. **Save lecture** and progress changes are stored in an encrypted draft in that browser. **Library settings → Publish changes** saves the encrypted catalogue, including video statuses and watch history, to GitHub for other devices and readers.
+7. Use **Export backup** regularly. Backups include progress and history, are encrypted and require the same password. Import merges records by ID and keeps the more recently edited record.
+8. The textbook section is reserved for a later expansion. Source PDFs and other documents have been counted but have not been imported or uploaded.
 
 ## Sharing and privacy
 
-The site code and encrypted data file are public; the catalogue, source filenames, tags, notes and YouTube links are encrypted. Share the site address and password separately. Anyone with the password can read the entire catalogue. Publishing changes additionally requires write access to the GitHub repository.
+The site code and encrypted data file are public; the catalogue, source filenames, tags, notes, YouTube links, viewing status and watch history are encrypted. Share the site address and password separately. Anyone with the password can read the entire catalogue. Publishing changes additionally requires write access to the GitHub repository.
 
 The browser uses AES-256-GCM with a fresh random 96-bit IV per encryption and PBKDF2-SHA256 with 600,000 iterations and a 128-bit random salt. The password-derived key remains in memory; browser drafts are encrypted in IndexedDB. The Lock button removes the unlocked application state. No analytics, third-party fonts, video thumbnails or YouTube players load with the catalogue.
 
@@ -87,4 +89,4 @@ npm test
 npm run build
 ```
 
-Tests cover Unicode encryption round trips, wrong passwords, tampering, fresh IVs, invalid envelopes, tag search, YouTube URL validation, stale concurrent edits, expired GitHub tokens and ambiguous network responses. The production build includes TypeScript checks and a guard against private files, the local password and unexpected source maps in public output. Only app-owned files are included in the `lint` script; the generated component catalogue remains unmodified.
+Tests cover Unicode encryption round trips, wrong passwords, tampering, fresh IVs, invalid envelopes, tag search, video progress and watch-history behaviour, YouTube URL validation, stale concurrent edits, expired GitHub tokens and ambiguous network responses. The production build includes TypeScript checks and a guard against private files, the local password and unexpected source maps in public output. Only app-owned files are included in the `lint` script; the generated component catalogue remains unmodified.
