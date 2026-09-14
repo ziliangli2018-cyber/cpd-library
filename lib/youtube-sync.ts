@@ -124,7 +124,10 @@ async function fetchJson(
       ...init,
       cache: 'no-store',
       signal: controller.signal,
-    });
+      // Chrome's Local Network Access model uses this hint to identify the
+      // loopback destination before mixed-content and permission checks.
+      targetAddressSpace: 'local',
+    } as RequestInit & { targetAddressSpace: 'local' });
     const body = (await response.json()) as { error?: string };
     if (!response.ok)
       throw new Error(
