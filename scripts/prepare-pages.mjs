@@ -3,14 +3,14 @@ import path from 'node:path';
 import { validateEnvelope } from '../lib/vault.ts';
 const directory = 'dist/client';
 const csp =
-  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com; object-src 'none'; base-uri 'self'; frame-src 'none'; form-action 'none'";
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' https://api.github.com http://127.0.0.1:8765; object-src 'none'; base-uri 'self'; frame-src https://www.youtube.com https://www.youtube-nocookie.com; form-action 'none'";
 const indexPath = path.join(directory, 'index.html');
 let html = await readFile(indexPath, 'utf8');
 if (!html.includes('Dental Library'))
   throw new Error('Missing library page in static export.');
 html = html.replace(
   '<head>',
-  `<head><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="no-referrer">`,
+  `<head><meta http-equiv="Content-Security-Policy" content="${csp}"><meta name="referrer" content="strict-origin-when-cross-origin">`,
 );
 await writeFile(indexPath, html);
 await writeFile(path.join(directory, '.nojekyll'), '');

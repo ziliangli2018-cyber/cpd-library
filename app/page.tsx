@@ -11,7 +11,7 @@ import {
   validateEnvelope,
 } from '@/lib/vault';
 import { readDraft } from '@/lib/storage';
-import { validateCatalogue } from '@/lib/catalogue';
+import { mergeCatalogues, validateCatalogue } from '@/lib/catalogue';
 export default function Home() {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
@@ -38,22 +38,26 @@ export default function Home() {
           'That password did not unlock the library. Check it and try again.',
         );
       }
-      let catalogue = validateCatalogue(result.value);
-      let baseline = await fingerprint(envelope);
+      const sharedCatalogue = validateCatalogue(result.value);
+      let catalogue = sharedCatalogue;
+      const baseline = await fingerprint(envelope);
       let dirty = false;
       let notice = '';
       try {
         const draft = await readDraft();
         if (draft?.dirty) {
           try {
-            catalogue = validateCatalogue(
+            const draftCatalogue = validateCatalogue(
               await openWithSession(draft.envelope, result.session),
             );
+            catalogue = mergeCatalogues(
+              sharedCatalogue,
+              draftCatalogue,
+            ).catalogue;
             notice =
               draft.baseline !== baseline
-                ? 'Your draft was restored. The shared version has changed; export a backup before merging the latest library.'
+                ? 'Your encrypted browser draft was merged with the latest shared library.'
                 : 'Your unpublished changes were restored from this browser.';
-            baseline = draft.baseline;
             dirty = true;
           } catch {
             notice =

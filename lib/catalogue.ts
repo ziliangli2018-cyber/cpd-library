@@ -4,13 +4,17 @@ export const DISCIPLINES = [
   'Prosthodontics',
   'Periodontics',
   'Implant dentistry',
+  'Implantology & periodontology',
   'Oral surgery',
+  'Oral medicine',
   'Endodontics',
   'Digital dentistry',
   'Orofacial pain & sleep',
   'Paediatric dentistry',
   'Radiology',
+  'Practice management',
   'General dentistry',
+  'Needs classification',
 ] as const;
 export const MAX_WATCH_HISTORY = 50;
 export type LectureProgressStatus = 'unseen' | 'in-progress' | 'seen';
@@ -23,6 +27,7 @@ export type Lecture = {
   id: string;
   title: string;
   course: string;
+  courseKey: string;
   module: string;
   discipline: string;
   tags: string[];
@@ -30,6 +35,7 @@ export type Lecture = {
   youtubeSource?: 'uploader' | 'manual';
   youtubeStatus?: 'current' | 'unavailable';
   youtubePrivacy?: 'private' | 'unlisted' | 'public';
+  youtubeTitle?: string;
   youtubePreviousUrl?: string;
   youtubeUnavailableAt?: string;
   youtubeUpdatedAt?: string;
@@ -44,6 +50,8 @@ export type Lecture = {
   importedAt: string;
   updatedAt: string;
   classificationReviewed: boolean;
+  taxonomySource?: 'folder' | 'manual';
+  taxonomyUpdatedAt?: string;
   availability: string;
   duplicateGroup?: string;
   sourceUpdatedAt?: string;
@@ -122,6 +130,53 @@ function progressEventAt(lecture: Lecture): number {
   );
 }
 
+function legacyCourseKey(lecture: Lecture): string {
+  return `${lecture.source}\u0000${courseLabel(lecture.course)}`;
+}
+
+function taxonomyEventAt(lecture: Lecture): number {
+  return (
+    Date.parse(lecture.taxonomyUpdatedAt || lecture.updatedAt || '') || 0
+  );
+}
+
+function youtubeEventAt(lecture: Lecture): number {
+  return Date.parse(lecture.youtubeUpdatedAt || lecture.updatedAt || '') || 0;
+}
+
+function youtubeWinner(
+  old: Lecture,
+  incoming: Lecture,
+  generalWinner: Lecture,
+): Lecture {
+  const oldAt = youtubeEventAt(old);
+  const incomingAt = youtubeEventAt(incoming);
+  return incomingAt > oldAt
+    ? incoming
+    : oldAt > incomingAt
+      ? old
+      : generalWinner;
+}
+
+function taxonomyWinner(
+  old: Lecture,
+  incoming: Lecture,
+  generalWinner: Lecture,
+): Lecture {
+  const oldManual =
+    old.taxonomySource === 'manual' || old.classificationReviewed;
+  const incomingManual =
+    incoming.taxonomySource === 'manual' || incoming.classificationReviewed;
+  if (oldManual !== incomingManual) return oldManual ? old : incoming;
+  const oldAt = taxonomyEventAt(old);
+  const incomingAt = taxonomyEventAt(incoming);
+  return incomingAt > oldAt
+    ? incoming
+    : oldAt > incomingAt
+      ? old
+      : generalWinner;
+}
+
 export type Catalogue = {
   schemaVersion: 1;
   updatedAt: string;
@@ -131,6 +186,9 @@ export type Catalogue = {
     sources: { name: string; count: number }[];
     documents: number;
     skipped: number;
+    taxonomyChanges?: number;
+    hierarchyChanges?: number;
+    coursesNeedingClassification?: number;
   };
 };
 
@@ -165,8 +223,19 @@ export function mergeCatalogues(
         : oldProgressAt > incomingProgressAt
           ? old
           : next;
+    const taxonomy = taxonomyWinner(old, record, next);
+    const youtube = youtubeWinner(old, record, next);
     next = {
       ...next,
+      course: taxonomy.course,
+      courseKey: taxonomy.courseKey || legacyCourseKey(taxonomy),
+      module: taxonomy.module,
+      discipline: taxonomy.discipline,
+      classificationReviewed: taxonomy.classificationReviewed,
+      taxonomySource:
+        taxonomy.taxonomySource ||
+        (taxonomy.classificationReviewed ? 'manual' : 'folder'),
+      taxonomyUpdatedAt: taxonomy.taxonomyUpdatedAt || taxonomy.updatedAt,
       bytes: source.bytes,
       duration: source.duration,
       availability: source.availability,
@@ -178,7 +247,21 @@ export function mergeCatalogues(
         ...(record.watchHistory || []),
       ]),
       progressUpdatedAt: progress.progressUpdatedAt,
+      youtubeUrl: youtube.youtubeUrl,
     };
+    for (const key of [
+      'youtubeSource',
+      'youtubeStatus',
+      'youtubePrivacy',
+      'youtubeTitle',
+      'youtubePreviousUrl',
+      'youtubeUnavailableAt',
+      'youtubeUpdatedAt',
+    ] as const) {
+      const value = youtube[key];
+      if (value === undefined) delete next[key];
+      else (next as unknown as Record<string, unknown>)[key] = value;
+    }
     if (
       Object.keys(next).some(
         (k) =>
@@ -248,6 +331,14 @@ export function youtubeUrl(value: string): string {
     );
   return `https://www.youtube.com/watch?v=${id}`;
 }
+export function youtubeVideoId(value: string): string | null {
+  if (!value.trim()) return null;
+  try {
+    return new URL(youtubeUrl(value)).searchParams.get('v');
+  } catch {
+    return null;
+  }
+}
 export function validateCatalogue(value: unknown): Catalogue {
   const c = value as Catalogue;
   if (
@@ -266,12 +357,20 @@ export function validateCatalogue(value: unknown): Catalogue {
     if (v && v.watchHistory === undefined) v.watchHistory = [];
     if (v && v.progressStatus === undefined)
       v.progressStatus = v.watchHistory?.length ? 'in-progress' : 'unseen';
+    if (v && v.courseKey === undefined) v.courseKey = legacyCourseKey(v);
+    if (v && v.taxonomySource === undefined)
+      v.taxonomySource = v.classificationReviewed ? 'manual' : 'folder';
+    if (v && v.taxonomyUpdatedAt === undefined)
+      v.taxonomyUpdatedAt = v.classificationReviewed
+        ? v.updatedAt
+        : v.importedAt;
     if (
       !v ||
       [
         'id',
         'title',
         'course',
+        'courseKey',
         'module',
         'discipline',
         'youtubeUrl',
@@ -289,6 +388,10 @@ export function validateCatalogue(value: unknown): Catalogue {
       !Array.isArray(v.tags) ||
       v.tags.some((t) => typeof t !== 'string') ||
       typeof v.classificationReviewed !== 'boolean' ||
+      (v.taxonomySource !== 'folder' && v.taxonomySource !== 'manual') ||
+      !v.courseKey.trim() ||
+      typeof v.taxonomyUpdatedAt !== 'string' ||
+      !Number.isFinite(Date.parse(v.taxonomyUpdatedAt)) ||
       !['unseen', 'in-progress', 'seen'].includes(v.progressStatus) ||
       !Array.isArray(v.watchHistory) ||
       v.watchHistory.length > MAX_WATCH_HISTORY ||
@@ -314,6 +417,8 @@ export function validateCatalogue(value: unknown): Catalogue {
         v.youtubePrivacy !== 'private' &&
         v.youtubePrivacy !== 'unlisted' &&
         v.youtubePrivacy !== 'public') ||
+      (v.youtubeTitle !== undefined &&
+        (typeof v.youtubeTitle !== 'string' || v.youtubeTitle.length > 500)) ||
       (v.youtubePreviousUrl !== undefined &&
         typeof v.youtubePreviousUrl !== 'string') ||
       (v.youtubeUnavailableAt !== undefined &&

@@ -36,14 +36,21 @@ export function LectureEditor({
       if (!title) throw new Error('Add a lecture title.');
       const nextYoutubeUrl = youtubeUrl(draft.youtubeUrl);
       const youtubeChanged = nextYoutubeUrl !== lecture.youtubeUrl;
+      const taxonomyChanged =
+        draft.course.trim() !== lecture.course ||
+        draft.module.trim() !== lecture.module ||
+        draft.discipline !== lecture.discipline;
+      const now = new Date().toISOString();
       const next: Lecture = {
         ...draft,
         title,
         course: draft.course.trim() || 'Independent lectures',
+        module: draft.module.trim(),
         tags: normalizeTags(tags),
         youtubeUrl: nextYoutubeUrl,
         youtubeSource: youtubeChanged ? 'manual' : draft.youtubeSource,
         youtubePrivacy: youtubeChanged ? undefined : draft.youtubePrivacy,
+        youtubeTitle: youtubeChanged ? undefined : draft.youtubeTitle,
         youtubeStatus: youtubeChanged ? undefined : draft.youtubeStatus,
         youtubePreviousUrl: youtubeChanged
           ? undefined
@@ -52,10 +59,14 @@ export function LectureEditor({
           ? undefined
           : draft.youtubeUnavailableAt,
         youtubeUpdatedAt: youtubeChanged
-          ? new Date().toISOString()
+          ? now
           : draft.youtubeUpdatedAt,
-        classificationReviewed: true,
-        updatedAt: new Date().toISOString(),
+        taxonomySource: taxonomyChanged ? 'manual' : draft.taxonomySource,
+        taxonomyUpdatedAt: taxonomyChanged ? now : draft.taxonomyUpdatedAt,
+        classificationReviewed: taxonomyChanged
+          ? true
+          : draft.classificationReviewed,
+        updatedAt: now,
       };
       await onSave(next);
     } catch (e) {
@@ -106,7 +117,8 @@ export function LectureEditor({
         />
         {!lecture.classificationReviewed && (
           <p className="field-help">
-            Suggested from course and lecture names. Review it as you organise.
+            Organised from the source folder hierarchy. Changing the course or
+            discipline applies that correction to the whole course.
           </p>
         )}
         <label htmlFor="lecture-tags">Tags</label>

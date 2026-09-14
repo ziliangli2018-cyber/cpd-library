@@ -7,7 +7,6 @@ import {
   ChevronRight,
   Circle,
   Clock3,
-  ExternalLink,
   FolderOpen,
   Layers3,
   LockKeyhole,
@@ -35,6 +34,10 @@ function courseName(lecture: Lecture) {
   return courseLabel(lecture.course);
 }
 
+export function courseKeyForLecture(lecture: Lecture) {
+  return lecture.courseKey?.trim() || `${lecture.source}\u0000${courseName(lecture)}`;
+}
+
 function moduleName(lecture: Lecture) {
   return lecture.module.trim() || 'Course videos';
 }
@@ -53,8 +56,7 @@ export type CourseGroup = {
 export function groupCourses(lectures: Lecture[]): CourseGroup[] {
   const courses = new Map<string, Lecture[]>();
   for (const lecture of lectures) {
-    const name = courseName(lecture);
-    const key = `${lecture.discipline}\u0000${name}`;
+    const key = courseKeyForLecture(lecture);
     const records = courses.get(key);
     if (records) records.push(lecture);
     else courses.set(key, [lecture]);
@@ -178,7 +180,7 @@ function VideoItem({
   busy,
   showModule = false,
   onEdit,
-  onWatch,
+  onOpenLecture,
   onProgress,
   onTag,
 }: {
@@ -187,7 +189,7 @@ function VideoItem({
   busy: boolean;
   showModule?: boolean;
   onEdit: (lecture: Lecture) => void;
-  onWatch: (lecture: Lecture) => void;
+  onOpenLecture: (lecture: Lecture) => void;
   onProgress: (lecture: Lecture, status: LectureProgressStatus) => void;
   onTag: (tag: string) => void;
 }) {
@@ -205,8 +207,8 @@ function VideoItem({
       <div className="course-video-copy">
         <button
           className="course-video-title"
-          aria-label={`Edit lecture: ${lecture.title}`}
-          onClick={() => onEdit(lecture)}
+          aria-label={`Open lecture: ${lecture.title}`}
+          onClick={() => onOpenLecture(lecture)}
         >
           {number ? <span>{String(number).padStart(2, '0')}</span> : null}
           {lecture.title}
@@ -257,24 +259,14 @@ function VideoItem({
       </div>
       <ProgressSelect lecture={lecture} busy={busy} onChange={onProgress} />
       {lecture.youtubeUrl ? (
-        <a
+        <button
           className="course-watch-button"
-          aria-label={`Watch ${lecture.title} on YouTube`}
-          aria-disabled={busy}
-          tabIndex={busy ? -1 : undefined}
-          href={lecture.youtubeUrl}
-          target="_blank"
-          rel="noopener noreferrer"
-          onClick={(event) => {
-            if (busy) {
-              event.preventDefault();
-              return;
-            }
-            onWatch(lecture);
-          }}
+          aria-label={`Open ${lecture.title} video page`}
+          disabled={busy}
+          onClick={() => onOpenLecture(lecture)}
         >
-          <Play size={14} /> Watch <ExternalLink size={12} />
-        </a>
+          <Play size={14} /> Watch
+        </button>
       ) : (
         <button
           className="course-add-link"
@@ -302,7 +294,7 @@ function CourseCard({
 }: {
   course: CourseGroup;
   matchCount?: number;
-  onOpen: (discipline: string, course: string) => void;
+  onOpen: (courseKey: string, discipline: string, course: string) => void;
 }) {
   const { seen, inProgress } = progressCounts(course.lectures);
   const complete = course.lectures.length
@@ -312,7 +304,7 @@ function CourseCard({
   return (
     <button
       className="course-card"
-      onClick={() => onOpen(course.discipline, course.name)}
+      onClick={() => onOpen(course.key, course.discipline, course.name)}
     >
       <span className="course-card-icon">
         <FolderOpen size={20} />
@@ -348,15 +340,17 @@ export function HistorySection({
   lectures,
   busy,
   onOpenCourse,
-  onEdit,
-  onWatch,
+  onOpenLecture,
   onProgress,
 }: {
   lectures: Lecture[];
   busy: boolean;
-  onOpenCourse: (discipline: string, course: string) => void;
-  onEdit: (lecture: Lecture) => void;
-  onWatch: (lecture: Lecture) => void;
+  onOpenCourse: (
+    courseKey: string,
+    discipline: string,
+    course: string,
+  ) => void;
+  onOpenLecture: (lecture: Lecture) => void;
   onProgress: (lecture: Lecture, status: LectureProgressStatus) => void;
 }) {
   if (!lectures.length) {
@@ -402,8 +396,8 @@ export function HistorySection({
             </div>
             <button
               className="history-title"
-              aria-label={`Edit lecture: ${lecture.title}`}
-              onClick={() => onEdit(lecture)}
+              aria-label={`Open lecture: ${lecture.title}`}
+              onClick={() => onOpenLecture(lecture)}
             >
               {lecture.title}
             </button>
@@ -411,7 +405,11 @@ export function HistorySection({
               className="history-course"
               aria-label={`Open ${courseName(lecture)} course`}
               onClick={() =>
-                onOpenCourse(lecture.discipline, courseName(lecture))
+                onOpenCourse(
+                  courseKeyForLecture(lecture),
+                  lecture.discipline,
+                  courseName(lecture),
+                )
               }
             >
               {courseName(lecture)} <ChevronRight size={12} />
@@ -423,23 +421,13 @@ export function HistorySection({
                 onChange={onProgress}
               />
               {lecture.youtubeUrl && (
-                <a
-                  href={lecture.youtubeUrl}
-                  aria-label={`Resume ${lecture.title} on YouTube`}
-                  aria-disabled={busy}
-                  tabIndex={busy ? -1 : undefined}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={(event) => {
-                    if (busy) {
-                      event.preventDefault();
-                      return;
-                    }
-                    onWatch(lecture);
-                  }}
+                <button
+                  aria-label={`Resume ${lecture.title}`}
+                  disabled={busy}
+                  onClick={() => onOpenLecture(lecture)}
                 >
                   <Play size={13} /> Resume
-                </a>
+                </button>
               )}
             </div>
           </article>
@@ -538,7 +526,7 @@ export function CourseList({
   allLectures: Lecture[];
   discipline: string;
   filtering: boolean;
-  onOpen: (discipline: string, course: string) => void;
+  onOpen: (courseKey: string, discipline: string, course: string) => void;
   onClearFilters: () => void;
 }) {
   const matchingCourses = groupCourses(lectures);
@@ -595,10 +583,11 @@ export function CourseDetail({
   allLectures,
   discipline,
   course,
+  courseKey,
   busy,
   filtering,
   onEdit,
-  onWatch,
+  onOpenLecture,
   onProgress,
   onTag,
   onClearFilters,
@@ -607,19 +596,18 @@ export function CourseDetail({
   allLectures: Lecture[];
   discipline: string;
   course: string;
+  courseKey: string;
   busy: boolean;
   filtering: boolean;
   onEdit: (lecture: Lecture) => void;
-  onWatch: (lecture: Lecture) => void;
+  onOpenLecture: (lecture: Lecture) => void;
   onProgress: (lecture: Lecture, status: LectureProgressStatus) => void;
   onTag: (tag: string) => void;
   onClearFilters: () => void;
 }) {
-  const selected = groupCourses(lectures).find(
-    (item) => item.discipline === discipline && item.name === course,
-  );
+  const selected = groupCourses(lectures).find((item) => item.key === courseKey);
   const fullSelected = groupCourses(allLectures).find(
-    (item) => item.discipline === discipline && item.name === course,
+    (item) => item.key === courseKey,
   );
   if (!selected || !fullSelected)
     return (
@@ -712,7 +700,7 @@ export function CourseDetail({
                   )}
                   busy={busy}
                   onEdit={onEdit}
-                  onWatch={onWatch}
+                  onOpenLecture={onOpenLecture}
                   onProgress={onProgress}
                   onTag={onTag}
                 />
@@ -729,7 +717,7 @@ export function CourseDetail({
                   number={lecturePosition(lecture, fullSelected.lectures)}
                   busy={busy}
                   onEdit={onEdit}
-                  onWatch={onWatch}
+                  onOpenLecture={onOpenLecture}
                   onProgress={onProgress}
                   onTag={onTag}
                 />

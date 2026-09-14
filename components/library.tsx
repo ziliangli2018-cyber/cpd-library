@@ -1,12 +1,11 @@
 'use client';
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   BookOpen,
   ChevronLeft,
   ChevronRight,
   CloudUpload,
   Download,
-  ExternalLink,
   FolderOpen,
   Home,
   LibraryBig,
@@ -14,6 +13,7 @@ import {
   NotebookPen,
   Play,
   Plus,
+  RefreshCw,
   Search,
   Settings2,
   ShieldCheck,
@@ -41,11 +41,13 @@ import {
 } from '@/components/ui/sidebar';
 import { Choice } from '@/components/choice';
 import { LectureEditor, duration } from '@/components/lecture-editor';
+import { LecturePage } from '@/components/lecture-page';
 import {
   CourseDetail,
   CourseList,
   DisciplineOverview,
   HistorySection,
+  courseKeyForLecture,
 } from '@/components/course-browser';
 import {
   DISCIPLINES,
@@ -68,6 +70,10 @@ import {
 } from '@/lib/vault';
 import { writeDraft } from '@/lib/storage';
 import { pushGithub, readGithub, type GithubConfig } from '@/lib/github';
+import {
+  applyYoutubeUpdates,
+  fetchYoutubeUpdates,
+} from '@/lib/youtube-sync';
 export type Opened = {
   catalogue: Catalogue;
   session: VaultSession;
@@ -78,6 +84,16 @@ export type Opened = {
 const fmt = (n: number) => n.toLocaleString();
 const msg = (e: unknown) =>
   e instanceof Error ? e.message : 'Something went wrong. Please try again.';
+function lectureIdFromHash() {
+  if (typeof window === 'undefined') return '';
+  const match = /^#\/lecture\/(.+)$/.exec(window.location.hash);
+  if (!match) return '';
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return '';
+  }
+}
 export default function Library({
   initial,
   lock,
@@ -93,6 +109,7 @@ export default function Library({
     initial.dirty ? 'Unpublished changes' : 'Shared library up to date',
   );
   const [busy, setBusy] = useState(false);
+  const [youtubeRefreshing, setYoutubeRefreshing] = useState(false);
   const [view, setView] = useState('lectures');
   const [query, setQuery] = useState('');
   const [discipline, setDiscipline] = useState('');
@@ -100,6 +117,10 @@ export default function Library({
   const [status, setStatus] = useState('');
   const [tag, setTag] = useState('');
   const [course, setCourse] = useState('');
+  const [courseKey, setCourseKey] = useState('');
+  const [selectedLectureId, setSelectedLectureId] = useState(
+    lectureIdFromHash,
+  );
   const [progress, setProgress] = useState('');
   const [sort, setSort] = useState('linked');
   const [pagination, setPagination] = useState({ key: '', page: 1 });
@@ -115,6 +136,28 @@ export default function Library({
   const dataRef = useRef(data);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const pendingSaves = useRef(0);
+  useEffect(() => {
+    function followBrowserRoute() {
+      const id = lectureIdFromHash();
+      const lecture = dataRef.current.lectures.find((item) => item.id === id);
+      if (!lecture) {
+        setSelectedLectureId('');
+        return;
+      }
+      setView('lectures');
+      setDiscipline(lecture.discipline);
+      setCourse(lecture.course);
+      setCourseKey(courseKeyForLecture(lecture));
+      setSelectedLectureId(lecture.id);
+    }
+    followBrowserRoute();
+    window.addEventListener('hashchange', followBrowserRoute);
+    window.addEventListener('popstate', followBrowserRoute);
+    return () => {
+      window.removeEventListener('hashchange', followBrowserRoute);
+      window.removeEventListener('popstate', followBrowserRoute);
+    };
+  }, []);
   const filterKey = JSON.stringify([
     query,
     discipline,
@@ -122,6 +165,7 @@ export default function Library({
     status,
     tag,
     course,
+    courseKey,
     progress,
     sort,
     view,
@@ -149,15 +193,20 @@ export default function Library({
     (lecture) => lecture.progressStatus === 'in-progress',
   ).length;
   const history = useMemo(() => recentlyWatched(data.lectures, 8), [data]);
+  const selectedLecture = selectedLectureId
+    ? data.lectures.find((lecture) => lecture.id === selectedLectureId) || null
+    : null;
   const isFiltering = Boolean(query || source || status || tag || progress);
-  const pageTitle =
-    view === 'notes'
+  const pageTitle = selectedLecture
+    ? selectedLecture.title
+    : view === 'notes'
       ? 'Lecture notes'
       : view === 'textbooks'
         ? 'Textbooks'
         : course || discipline || 'Learning home';
-  const pageDescription =
-    view === 'notes'
+  const pageDescription = selectedLecture
+    ? [selectedLecture.course, selectedLecture.module].filter(Boolean).join(' · ')
+    : view === 'notes'
       ? 'Your observations, linked to the lectures they came from.'
       : view === 'textbooks'
         ? 'A dedicated home for your reading and reference notes.'
@@ -166,6 +215,10 @@ export default function Library({
           : discipline
             ? 'Choose a course to see its modules and videos.'
             : 'Pick up where you left off or browse your courses by discipline.';
+  useEffect(() => {
+    document.title = `${pageTitle} · Dental Library`;
+    document.querySelector<HTMLElement>('.page-heading h1')?.focus();
+  }, [pageTitle]);
   const sources = [...new Set(data.lectures.map((v) => v.source))];
   const tags = useMemo(() => {
     const map = new Map<string, number>();
@@ -179,8 +232,12 @@ export default function Library({
         view === 'notes'
           ? data.lectures.filter((v) => v.notes.trim())
           : data.lectures,
-        { query, discipline, source, status, tag, course },
+        { query, discipline, source, status, tag, course: '' },
       )
+        .filter(
+          (lecture) =>
+            !courseKey || courseKeyForLecture(lecture) === courseKey,
+        )
         .filter((lecture) => !progress || lecture.progressStatus === progress)
         .sort((a, b) =>
           compareLectures(
@@ -197,7 +254,7 @@ export default function Library({
       source,
       status,
       tag,
-      course,
+      courseKey,
       progress,
       sort,
     ],
@@ -212,6 +269,9 @@ export default function Library({
     setStatus('');
     setTag('');
     setCourse('');
+    setCourseKey('');
+    setSelectedLectureId('');
+    clearLectureRoute();
     setProgress('');
   }
   function clearSearchFilters() {
@@ -230,11 +290,40 @@ export default function Library({
     setView('lectures');
     setDiscipline(nextDiscipline);
     setCourse('');
+    setCourseKey('');
+    setSelectedLectureId('');
+    clearLectureRoute();
   }
-  function openCourse(nextDiscipline: string, nextCourse: string) {
+  function openCourse(
+    nextCourseKey: string,
+    nextDiscipline: string,
+    nextCourse: string,
+  ) {
     setView('lectures');
     setDiscipline(nextDiscipline);
     setCourse(nextCourse);
+    setCourseKey(nextCourseKey);
+    setSelectedLectureId('');
+    clearLectureRoute();
+  }
+  function openLecture(lecture: Lecture) {
+    setView('lectures');
+    setDiscipline(lecture.discipline);
+    setCourse(lecture.course);
+    setCourseKey(courseKeyForLecture(lecture));
+    setSelectedLectureId(lecture.id);
+    const hash = `#/lecture/${encodeURIComponent(lecture.id)}`;
+    if (window.location.hash !== hash)
+      window.history.pushState({ lectureId: lecture.id }, '', hash);
+  }
+  function clearLectureRoute() {
+    if (typeof window === 'undefined' || !window.location.hash.startsWith('#/lecture/'))
+      return;
+    window.history.pushState(
+      null,
+      '',
+      `${window.location.pathname}${window.location.search}`,
+    );
   }
   async function save(next: Catalogue) {
     dataRef.current = next;
@@ -270,14 +359,37 @@ export default function Library({
   }
   async function saveLecture(v: Lecture) {
     const current = dataRef.current;
-    const exists = current.lectures.some((x) => x.id === v.id);
+    const previous = current.lectures.find((x) => x.id === v.id);
+    const exists = !!previous;
+    const taxonomyChanged =
+      !!previous &&
+      (previous.course !== v.course ||
+        previous.discipline !== v.discipline);
+    const taxonomyUpdatedAt =
+      v.taxonomyUpdatedAt || new Date().toISOString();
     await save({
       ...current,
       updatedAt: new Date().toISOString(),
       lectures: exists
-        ? current.lectures.map((x) => (x.id === v.id ? v : x))
+        ? current.lectures.map((x) => {
+            if (x.id === v.id) return v;
+            if (!taxonomyChanged || x.courseKey !== previous.courseKey)
+              return x;
+            return {
+              ...x,
+              course: v.course,
+              discipline: v.discipline,
+              classificationReviewed: true,
+              taxonomySource: 'manual' as const,
+              taxonomyUpdatedAt,
+            };
+          })
         : [v, ...current.lectures],
     });
+    if (previous && courseKey === previous.courseKey) {
+      setCourse(v.course);
+      setDiscipline(v.discipline);
+    }
     setEditing(null);
   }
   async function updateLecture(v: Lecture) {
@@ -304,12 +416,59 @@ export default function Library({
       lecture;
     void updateLecture(recordLectureWatch(current, new Date().toISOString()));
   }
+  async function saveNotes(lectureId: string, notes: string) {
+    const current = dataRef.current.lectures.find(
+      (lecture) => lecture.id === lectureId,
+    );
+    if (!current || current.notes === notes) return;
+    await updateLecture({
+      ...current,
+      notes,
+      updatedAt: new Date().toISOString(),
+    });
+  }
+  async function refreshYoutube() {
+    setBusy(true);
+    setYoutubeRefreshing(true);
+    setNotice('Checking the uploader and YouTube for current links…');
+    try {
+      const result = await fetchYoutubeUpdates();
+      const applied = applyYoutubeUpdates(dataRef.current, result);
+      if (!applied.changes) {
+        setNotice(
+          `YouTube is already current across ${fmt(result.summary.matched || 0)} matched videos.`,
+        );
+        return;
+      }
+      await save(applied.catalogue);
+      const details = [
+        result.summary.newLinks
+          ? `${fmt(result.summary.newLinks)} new link${result.summary.newLinks === 1 ? '' : 's'}`
+          : '',
+        result.summary.privacyChanges
+          ? `${fmt(result.summary.privacyChanges)} visibility change${result.summary.privacyChanges === 1 ? '' : 's'}`
+          : '',
+        result.summary.titleChanges
+          ? `${fmt(result.summary.titleChanges)} title change${result.summary.titleChanges === 1 ? '' : 's'}`
+          : '',
+      ].filter(Boolean);
+      setNotice(
+        `YouTube updated ${fmt(applied.changes)} lecture${applied.changes === 1 ? '' : 's'}${details.length ? `: ${details.join(', ')}` : ''}. Publish the encrypted changes in Library settings when ready.`,
+      );
+    } catch (e) {
+      setNotice(msg(e));
+    } finally {
+      setYoutubeRefreshing(false);
+      if (pendingSaves.current === 0) setBusy(false);
+    }
+  }
   function addLecture() {
     const now = new Date().toISOString();
     setEditing({
       id: crypto.randomUUID(),
       title: '',
       course,
+      courseKey: courseKey || crypto.randomUUID(),
       module: '',
       discipline: discipline || 'General dentistry',
       tags: [],
@@ -322,6 +481,8 @@ export default function Library({
       importedAt: now,
       updatedAt: now,
       classificationReviewed: true,
+      taxonomySource: 'manual',
+      taxonomyUpdatedAt: now,
       availability: 'Added manually',
       progressStatus: 'unseen',
       watchHistory: [],
@@ -499,6 +660,9 @@ export default function Library({
                 onClick={() => {
                   setDiscipline('');
                   setCourse('');
+                  setCourseKey('');
+                  setSelectedLectureId('');
+                  clearLectureRoute();
                   setView('lectures');
                 }}
               >
@@ -535,6 +699,10 @@ export default function Library({
                 aria-pressed={tag === t}
                 onClick={() => {
                   setTag(tag === t ? '' : t);
+                  setCourse('');
+                  setCourseKey('');
+                  setSelectedLectureId('');
+                  clearLectureRoute();
                   setView('lectures');
                 }}
               >
@@ -574,7 +742,25 @@ export default function Library({
                 {course && (
                   <>
                     <ChevronRight size={14} />
-                    <strong>{course}</strong>
+                    {selectedLecture ? (
+                      <button
+                        onClick={() => {
+                          setSelectedLectureId('');
+                          clearLectureRoute();
+                          setView('lectures');
+                        }}
+                      >
+                        {course}
+                      </button>
+                    ) : (
+                      <strong>{course}</strong>
+                    )}
+                  </>
+                )}
+                {selectedLecture && (
+                  <>
+                    <ChevronRight size={14} />
+                    <strong>{selectedLecture.title}</strong>
                   </>
                 )}
               </>
@@ -591,6 +777,18 @@ export default function Library({
               <span /> Private content
             </span>
             <Button
+              className="youtube-refresh-button"
+              variant="outline"
+              onClick={() => void refreshYoutube()}
+              disabled={busy}
+            >
+              <RefreshCw
+                size={16}
+                className={youtubeRefreshing ? 'spin' : undefined}
+              />
+              <span>{youtubeRefreshing ? 'Updating…' : 'Update YouTube'}</span>
+            </Button>
+            <Button
               variant="outline"
               onClick={() => {
                 setSettingsError('');
@@ -606,10 +804,10 @@ export default function Library({
           <div className="page-heading">
             <div>
               <div className="eyebrow">YOUR KNOWLEDGE, CONNECTED</div>
-              <h1>{pageTitle}</h1>
+              <h1 tabIndex={-1}>{pageTitle}</h1>
               <p>{pageDescription}</p>
             </div>
-            {view === 'lectures' && (
+            {view === 'lectures' && !selectedLecture && (
               <Button
                 className="primary-btn"
                 onClick={addLecture}
@@ -646,6 +844,16 @@ export default function Library({
                 source folders, ready for later review.
               </div>
             </section>
+          ) : selectedLecture ? (
+            <LecturePage
+              key={selectedLecture.id}
+              lecture={selectedLecture}
+              busy={busy}
+              onEdit={setEditing}
+              onWatch={recordWatch}
+              onProgress={updateProgress}
+              onSaveNotes={saveNotes}
+            />
           ) : (
             <>
               <div className="collection-overview">
@@ -786,10 +994,11 @@ export default function Library({
                     allLectures={data.lectures}
                     discipline={discipline}
                     course={course}
+                    courseKey={courseKey}
                     busy={busy}
                     filtering={isFiltering}
                     onEdit={setEditing}
-                    onWatch={recordWatch}
+                    onOpenLecture={openLecture}
                     onProgress={updateProgress}
                     onTag={setTag}
                     onClearFilters={clearSearchFilters}
@@ -808,12 +1017,19 @@ export default function Library({
                     <HistorySection
                       lectures={history}
                       busy={busy}
-                      onOpenCourse={(nextDiscipline, nextCourse) => {
+                      onOpenCourse={(
+                        nextCourseKey,
+                        nextDiscipline,
+                        nextCourse,
+                      ) => {
                         clearSearchFilters();
-                        openCourse(nextDiscipline, nextCourse);
+                        openCourse(
+                          nextCourseKey,
+                          nextDiscipline,
+                          nextCourse,
+                        );
                       }}
-                      onEdit={setEditing}
-                      onWatch={recordWatch}
+                      onOpenLecture={openLecture}
                       onProgress={updateProgress}
                     />
                     <DisciplineOverview
@@ -834,8 +1050,8 @@ export default function Library({
                       {discipline && ` in ${discipline}`}
                     </span>
                     <span className="classification-hint">
-                      <span className="tiny-dot" /> Disciplines suggested from
-                      course titles · editable
+                      <span className="tiny-dot" /> Courses follow their source
+                      folders · discipline editable by course
                     </span>
                   </div>
                   {rows.length ? (
@@ -852,22 +1068,19 @@ export default function Library({
                         <article key={v.id} className="lecture-row">
                           <div className="lecture-info">
                             {v.youtubeUrl ? (
-                              <a
+                              <button
                                 className="play-tile linked-play-tile"
-                                href={v.youtubeUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                aria-label={`Watch ${v.title} on YouTube`}
-                                onClick={() => recordWatch(v)}
+                                aria-label={`Open lecture: ${v.title}`}
+                                onClick={() => openLecture(v)}
                               >
                                 <Play size={19} />
                                 <span>WATCH</span>
-                              </a>
+                              </button>
                             ) : (
                               <button
                                 className="play-tile"
-                                aria-label={`Edit ${v.title}`}
-                                onClick={() => setEditing(v)}
+                                aria-label={`Open lecture: ${v.title}`}
+                                onClick={() => openLecture(v)}
                               >
                                 <Plus size={19} />
                                 <span>
@@ -880,14 +1093,18 @@ export default function Library({
                             <div className="lecture-copy">
                               <button
                                 className="lecture-title"
-                                onClick={() => setEditing(v)}
+                                onClick={() => openLecture(v)}
                               >
                                 {v.title}
                               </button>
                               <button
                                 className="course-link"
                                 onClick={() =>
-                                  openCourse(v.discipline, v.course)
+                                  openCourse(
+                                    courseKeyForLecture(v),
+                                    v.discipline,
+                                    v.course,
+                                  )
                                 }
                               >
                                 {v.course}
@@ -911,6 +1128,9 @@ export default function Library({
                               onClick={() => {
                                 setDiscipline(v.discipline);
                                 setCourse('');
+                                setCourseKey('');
+                                setSelectedLectureId('');
+                                clearLectureRoute();
                               }}
                             >
                               {v.discipline}
@@ -928,16 +1148,12 @@ export default function Library({
                           </div>
                           <div className="lecture-link">
                             {v.youtubeUrl ? (
-                              <a
+                              <button
                                 className="watch-link"
-                                href={v.youtubeUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                onClick={() => recordWatch(v)}
+                                onClick={() => openLecture(v)}
                               >
-                                <Play size={14} /> Watch{' '}
-                                <ExternalLink size={13} />
-                              </a>
+                                <Play size={14} /> Open video
+                              </button>
                             ) : (
                               <button
                                 className="add-link"

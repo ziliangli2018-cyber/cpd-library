@@ -13,6 +13,7 @@ import {
   validateCatalogue,
   normalizeTags,
   youtubeUrl,
+  youtubeVideoId,
   filterLectures,
   compareLectures,
   setLectureProgress,
@@ -23,12 +24,14 @@ import {
 } from '../lib/catalogue.ts';
 
 import { pushGithub } from '../lib/github.ts';
+import { applyYoutubeUpdates } from '../lib/youtube-sync.ts';
 
 const password = 'A very long random test password';
 const lecture = {
   id: 'test',
   title: 'Private lecture 牙齿',
   course: 'Test course',
+  courseKey: 'test-course-key',
   module: 'Module 1',
   discipline: 'Orthodontics',
   tags: ['Clear aligners'],
@@ -43,6 +46,8 @@ const lecture = {
   importedAt: '2026-09-07T00:00:00Z',
   updatedAt: '2026-09-07T00:00:00Z',
   classificationReviewed: false,
+  taxonomySource: 'folder',
+  taxonomyUpdatedAt: '2026-09-07T00:00:00Z',
   availability: 'Source file found',
 };
 const catalogue = {
@@ -121,6 +126,18 @@ test('tag and URL validation supports real video links and rejects malicious lin
       lectures: [{ ...lecture, youtubePrivacy: 'friends-only' }],
     }),
   );
+});
+test('embed IDs are derived only from valid YouTube video URLs', () => {
+  assert.equal(
+    youtubeVideoId('https://youtu.be/AAAAAAAAAAA?t=12'),
+    'AAAAAAAAAAA',
+  );
+  assert.equal(
+    youtubeVideoId('https://www.youtube-nocookie.com/embed/BBBBBBBBBBB'),
+    'BBBBBBBBBBB',
+  );
+  assert.equal(youtubeVideoId('https://example.com/watch?v=AAAAAAAAAAA'), null);
+  assert.equal(youtubeVideoId('javascript:alert(1)'), null);
 });
 test('old catalogues migrate to safe progress defaults and invalid progress is rejected', () => {
   const legacyLecture = { ...lecture };
@@ -238,6 +255,115 @@ test('newer progress merges without reverting newer human edits', () => {
   assert.equal(result.progressStatus, 'in-progress');
   assert.deepEqual(result.watchHistory, ['2026-09-09T03:00:00.000Z']);
   assert.equal(result.progressUpdatedAt, '2026-09-09T03:00:00.000Z');
+});
+test('newer folder taxonomy merges independently from local progress', () => {
+  const remoteFolderScan = {
+    ...lecture,
+    course: 'Move Teeth or Restore',
+    courseKey: 'dent-s-course-075',
+    module: 'Module 3',
+    discipline: 'Orthodontics',
+    taxonomyUpdatedAt: '2026-09-10T01:00:00.000Z',
+  };
+  const localWatch = recordLectureWatch(
+    {
+      ...lecture,
+      course: 'Move Teeth or Restore',
+      courseKey: 'old-split-course',
+      discipline: 'Endodontics',
+    },
+    '2026-09-11T01:00:00.000Z',
+  );
+  const result = mergeCatalogues(
+    { ...catalogue, lectures: [remoteFolderScan] },
+    { ...catalogue, lectures: [localWatch] },
+  ).catalogue.lectures[0];
+  assert.equal(result.courseKey, 'dent-s-course-075');
+  assert.equal(result.discipline, 'Orthodontics');
+  assert.equal(result.module, 'Module 3');
+  assert.equal(result.progressStatus, 'in-progress');
+  assert.deepEqual(result.watchHistory, ['2026-09-11T01:00:00.000Z']);
+});
+test('manual taxonomy is not overwritten by a later folder scan', () => {
+  const manual = {
+    ...lecture,
+    course: 'My corrected course',
+    courseKey: 'manual-course',
+    discipline: 'Endodontics',
+    classificationReviewed: true,
+    taxonomySource: 'manual',
+    taxonomyUpdatedAt: '2026-09-08T01:00:00.000Z',
+  };
+  const folderScan = {
+    ...lecture,
+    courseKey: 'folder-course',
+    discipline: 'Orthodontics',
+    taxonomyUpdatedAt: '2026-09-10T01:00:00.000Z',
+  };
+  const result = mergeCatalogues(
+    { ...catalogue, lectures: [folderScan] },
+    { ...catalogue, lectures: [manual] },
+  ).catalogue.lectures[0];
+  assert.equal(result.course, 'My corrected course');
+  assert.equal(result.courseKey, 'manual-course');
+  assert.equal(result.discipline, 'Endodontics');
+  assert.equal(result.taxonomySource, 'manual');
+});
+test('YouTube refresh metadata and human notes merge independently', () => {
+  const refreshedYoutube = {
+    ...lecture,
+    youtubeUrl: 'https://www.youtube.com/watch?v=BBBBBBBBBBB',
+    youtubeTitle: 'Current channel title',
+    youtubePrivacy: 'unlisted',
+    youtubeStatus: 'current',
+    youtubeUpdatedAt: '2026-09-12T01:00:00.000Z',
+  };
+  const newerNotesWithStaleYoutube = {
+    ...lecture,
+    notes: 'Do not lose these newer clinical notes',
+    updatedAt: '2026-09-13T01:00:00.000Z',
+    youtubeUrl: 'https://www.youtube.com/watch?v=AAAAAAAAAAA',
+    youtubeTitle: 'Old channel title',
+    youtubePrivacy: 'private',
+    youtubeUpdatedAt: '2026-09-10T01:00:00.000Z',
+  };
+  const result = mergeCatalogues(
+    { ...catalogue, lectures: [refreshedYoutube] },
+    { ...catalogue, lectures: [newerNotesWithStaleYoutube] },
+  ).catalogue.lectures[0];
+  assert.equal(result.notes, 'Do not lose these newer clinical notes');
+  assert.equal(result.youtubeUrl, refreshedYoutube.youtubeUrl);
+  assert.equal(result.youtubeTitle, 'Current channel title');
+  assert.equal(result.youtubePrivacy, 'unlisted');
+  assert.equal(result.youtubeUpdatedAt, '2026-09-12T01:00:00.000Z');
+});
+test('live refresh never replaces a different manually entered YouTube link', () => {
+  const manual = {
+    ...lecture,
+    youtubeUrl: 'https://www.youtube.com/watch?v=AAAAAAAAAAA',
+    youtubeSource: 'manual',
+    youtubeUpdatedAt: '2026-09-10T01:00:00.000Z',
+  };
+  const result = applyYoutubeUpdates(
+    { ...catalogue, lectures: [manual] },
+    {
+      updates: [
+        {
+          id: manual.id,
+          youtubeUrl: 'https://www.youtube.com/watch?v=BBBBBBBBBBB',
+          youtubeSource: 'uploader',
+          youtubeStatus: 'current',
+          youtubePrivacy: 'unlisted',
+          youtubeTitle: 'Uploader title',
+          youtubeUpdatedAt: '2026-09-14T01:00:00.000Z',
+        },
+      ],
+      summary: { changed: 1 },
+    },
+  );
+  assert.equal(result.changes, 0);
+  assert.equal(result.catalogue.lectures[0].youtubeUrl, manual.youtubeUrl);
+  assert.equal(result.catalogue.lectures[0].youtubeSource, 'manual');
 });
 test('linked-first ordering surfaces shareable videos before private and unlinked lectures', () => {
   const records = [

@@ -8,16 +8,17 @@ A static, password-encrypted dental CPD catalogue designed for GitHub Pages. Vid
 2. The Home page groups the library by discipline and shows recently watched videos. Open a discipline to see its courses, then open a course to see its videos. Courses with several modules use collapsible module sections; courses without meaningful module divisions show one direct video list.
 3. Mark each video **Unseen**, **In progress** or **Seen**. Opening a video records it in watch history and moves an unseen video to in progress; opening a completed video leaves it seen.
 4. Search titles, courses, disciplines and tags. Combine search with discipline, course, source and YouTube-link filters when you need to find an individual video directly.
-5. Open a lecture to edit its title, main discipline, comma-separated tags, YouTube URL and notes. Notes also appear in their own section.
-6. **Save lecture** and progress changes are stored in an encrypted draft in that browser. **Library settings → Publish changes** saves the encrypted catalogue, including video statuses and watch history, to GitHub for other devices and readers.
-7. Use **Export backup** regularly. Backups include progress and history, are encrypted and require the same password. Import merges records by ID and keeps the more recently edited record.
-8. The textbook section is reserved for a later expansion. Source PDFs and other documents have been counted but have not been imported or uploaded.
+5. Open a lecture for its dedicated page. Linked unlisted/public videos play in an embedded YouTube player, and the notes editor sits directly underneath. Private videos open on YouTube for invited accounts.
+6. On the owner's computer, **Update YouTube** asks the local uploader helper to refresh link visibility, YouTube titles and newly uploaded links. The returned patch contains YouTube fields only and is saved as an encrypted browser draft.
+7. **Save lecture** and progress changes are stored in an encrypted draft in that browser. **Library settings → Publish changes** saves the encrypted catalogue, including video statuses and watch history, to GitHub for other devices and readers.
+8. Use **Export backup** regularly. Backups include progress and history, are encrypted and require the same password. Import merges records by ID and keeps the more recently edited record.
+9. The textbook section is reserved for a later expansion. Source PDFs and other documents have been counted but have not been imported or uploaded.
 
 ## Sharing and privacy
 
 The site code and encrypted data file are public; the catalogue, source filenames, tags, notes, YouTube links, viewing status and watch history are encrypted. Share the site address and password separately. Anyone with the password can read the entire catalogue. Publishing changes additionally requires write access to the GitHub repository.
 
-The browser uses AES-256-GCM with a fresh random 96-bit IV per encryption and PBKDF2-SHA256 with 600,000 iterations and a 128-bit random salt. The password-derived key remains in memory; browser drafts are encrypted in IndexedDB. The Lock button removes the unlocked application state. No analytics, third-party fonts, video thumbnails or YouTube players load with the catalogue.
+The browser uses AES-256-GCM with a fresh random 96-bit IV per encryption and PBKDF2-SHA256 with 600,000 iterations and a 128-bit random salt. The password-derived key remains in memory; browser drafts are encrypted in IndexedDB. The Lock button removes the unlocked application state. No analytics, third-party fonts or video thumbnails load with the catalogue. The YouTube player loads only after **Play video** is pressed.
 
 GitHub publishing uses a fine-grained token restricted to this repository with **Contents: read and write**. The token stays in memory while the settings panel is open; it is never written to the repository or browser storage. Saves verify the catalogue revision originally opened. A conflict preserves the local draft; export it, then use **Load & merge latest** and review before publishing. Lecture content uses the newer record when both copies were edited, while progress and watch history merge independently so a routine viewing update cannot replace newer notes, tags or links.
 
@@ -48,7 +49,7 @@ npm run link-youtube
 npm run encrypt
 ```
 
-The scan tracks source metadata separately from human edits, preserves edited fields and stable IDs, adds new source files and flags missing sources without deleting records. It retains descriptively titled `.ts` recordings and flags possible same-name/size duplicates without merging them. Files modified in the last three minutes, zero-byte files and known undersized downloads are skipped. File presence does not verify playback or completeness when expected size is unknown. The YouTube refresh reads the authenticated channel's current uploads through the official API. Linking then uses the uploader's exact source path and only accepts IDs still present on that channel; manually edited links win.
+The scan derives each course, module and stable course key from the configured source-folder levels. Discipline mappings are applied once to the course folder, so words in individual lecture titles cannot split a course. Unmapped folders stay intact under **Needs classification**. The scan tracks source metadata separately from human edits, preserves edited fields and stable IDs, adds new source files and flags missing sources without deleting records. It retains descriptively titled `.ts` recordings and flags possible same-name/size duplicates without merging them. Files modified in the last three minutes, zero-byte files and known undersized downloads are skipped. File presence does not verify playback or completeness when expected size is unknown.
 
 The local browser bridge uses a patch-only refresh so live YouTube data cannot overwrite notes, tags or course organisation:
 
@@ -56,7 +57,7 @@ The local browser bridge uses a patch-only refresh so live YouTube data cannot o
 npm run youtube:patch
 ```
 
-It writes `.private/youtube-sync-patch.json` with lecture IDs and YouTube metadata only. The OAuth refresh token, uploader state and decrypted catalogue stay local. YouTube titles are stored separately from editable lecture titles, and YouTube updates use `youtubeUpdatedAt` rather than advancing the human-edit timestamp. A static GitHub Pages tab cannot perform the authenticated refresh by itself because it cannot safely hold the channel refresh token or read the local uploader state.
+It writes `.private/youtube-sync-patch.json` with lecture IDs and YouTube metadata only. The **Update YouTube** button calls the same command through the local YouTube Folder Uploader on `127.0.0.1`; the static site never receives OAuth credentials or uploader state. YouTube titles are stored separately from editable lecture titles, and YouTube updates use `youtubeUpdatedAt` rather than advancing the human-edit timestamp. Other readers can browse and play shared videos, but only the owner's computer can run the authenticated refresh.
 
 ## Make linked private videos shareable
 
