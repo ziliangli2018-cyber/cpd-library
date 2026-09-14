@@ -135,6 +135,7 @@ def build_patch(
                 description_by_lecture[lecture['id']] = (video, reason)
 
     updates = []
+    matched_lecture_ids = set()
     summary = {
         'channelId': channel.get('channel_id', ''),
         'generatedAt': generated_at,
@@ -181,6 +182,7 @@ def build_patch(
             summary['descriptionMatchesUsed'] += 1
 
         if video is not None:
+            matched_lecture_ids.add(lecture['id'])
             video_id = video['video_id']
             next_url = f'https://www.youtube.com/watch?v={video_id}'
             privacy = video.get('privacy_status')
@@ -234,6 +236,10 @@ def build_patch(
                 updates.append(update)
                 summary['markedUnavailable'] += 1
 
+    summary['matched'] = len(matched_lecture_ids)
+    summary['privacyChanges'] = summary['visibilityChanged']
+    summary['titleChanges'] = summary['titlesChanged']
+    summary['changed'] = len(updates)
     summary['updates'] = len(updates)
     return {
         'updates': updates,
