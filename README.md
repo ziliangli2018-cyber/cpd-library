@@ -57,7 +57,7 @@ The local browser bridge uses a patch-only refresh so live YouTube data cannot o
 npm run youtube:patch
 ```
 
-It writes `.private/youtube-sync-patch.json` with lecture IDs and YouTube metadata only. The **Update YouTube** button calls the same command through the local YouTube Folder Uploader on `127.0.0.1`; the static site never receives OAuth credentials or uploader state. YouTube titles are stored separately from editable lecture titles, and YouTube updates use `youtubeUpdatedAt` rather than advancing the human-edit timestamp. Other readers can browse and play shared videos, but only the owner's computer can run the authenticated refresh.
+It writes `.private/youtube-sync-patch.json` with lecture IDs and YouTube metadata only. The **Update YouTube** button briefly opens a local refresh window from the YouTube Folder Uploader on `127.0.0.1`, then returns the validated patch to the library. The static site never receives OAuth credentials or uploader state. YouTube titles are stored separately from editable lecture titles, and YouTube updates use `youtubeUpdatedAt` rather than advancing the human-edit timestamp. Other readers can browse and play shared videos, but only the owner's computer can run the authenticated refresh.
 
 ## Make linked private videos shareable
 

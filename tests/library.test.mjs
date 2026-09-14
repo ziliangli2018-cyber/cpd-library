@@ -24,7 +24,10 @@ import {
 } from '../lib/catalogue.ts';
 
 import { pushGithub } from '../lib/github.ts';
-import { applyYoutubeUpdates } from '../lib/youtube-sync.ts';
+import {
+  applyYoutubeUpdates,
+  youtubeBridgeMessage,
+} from '../lib/youtube-sync.ts';
 
 const password = 'A very long random test password';
 const lecture = {
@@ -364,6 +367,46 @@ test('live refresh never replaces a different manually entered YouTube link', ()
   assert.equal(result.changes, 0);
   assert.equal(result.catalogue.lectures[0].youtubeUrl, manual.youtubeUrl);
   assert.equal(result.catalogue.lectures[0].youtubeSource, 'manual');
+});
+test('local updater messages require the exact request and a bounded result shape', () => {
+  const requestId = 'a'.repeat(32);
+  const result = { updates: [], summary: { matched: 0 } };
+  assert.equal(
+    youtubeBridgeMessage(
+      {
+        type: 'cpd-library-youtube-sync',
+        requestId,
+        ok: true,
+        result,
+      },
+      requestId,
+    )?.result,
+    result,
+  );
+  assert.equal(
+    youtubeBridgeMessage(
+      {
+        type: 'cpd-library-youtube-sync',
+        requestId: 'b'.repeat(32),
+        ok: true,
+        result,
+      },
+      requestId,
+    ),
+    null,
+  );
+  assert.equal(
+    youtubeBridgeMessage(
+      {
+        type: 'cpd-library-youtube-sync',
+        requestId,
+        ok: false,
+        error: 'x'.repeat(1_001),
+      },
+      requestId,
+    ),
+    null,
+  );
 });
 test('linked-first ordering surfaces shareable videos before private and unlinked lectures', () => {
   const records = [

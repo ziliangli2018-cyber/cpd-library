@@ -74,8 +74,7 @@ export function applyYoutubeUpdates(
     const update = updates.get(lecture.id);
     if (!update) return lecture;
     const protectsManualLink =
-      lecture.youtubeSource === 'manual' &&
-      update.youtubeSource === 'uploader';
+      lecture.youtubeSource === 'manual' && update.youtubeSource === 'uploader';
     if (protectsManualLink && lecture.youtubeUrl !== update.youtubeUrl)
       return lecture;
     if (
@@ -112,58 +111,138 @@ export function applyYoutubeUpdates(
   };
 }
 
-async function fetchJson(
-  url: string,
-  init: RequestInit,
-  timeoutMs: number,
-): Promise<unknown> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      ...init,
-      cache: 'no-store',
-      signal: controller.signal,
-      // Chrome's Local Network Access model uses this hint to identify the
-      // loopback destination before mixed-content and permission checks.
-      targetAddressSpace: 'loopback',
-    } as RequestInit & { targetAddressSpace: 'loopback' });
-    const body = (await response.json()) as { error?: string };
-    if (!response.ok)
-      throw new Error(
-        body.error || `The local YouTube helper returned ${response.status}.`,
-      );
-    return body;
-  } finally {
-    clearTimeout(timer);
-  }
+type YoutubeBridgeMessage = {
+  type?: unknown;
+  requestId?: unknown;
+  phase?: unknown;
+  ok?: unknown;
+  result?: unknown;
+  error?: unknown;
+};
+
+export function youtubeBridgeMessage(
+  value: unknown,
+  requestId: string,
+): YoutubeBridgeMessage | null {
+  if (!value || typeof value !== 'object') return null;
+  const message = value as YoutubeBridgeMessage;
+  if (
+    message.type !== 'cpd-library-youtube-sync' ||
+    message.requestId !== requestId
+  )
+    return null;
+  if (message.phase === 'ready') return message;
+  if (
+    message.ok === true &&
+    message.result &&
+    typeof message.result === 'object'
+  )
+    return message;
+  if (
+    message.ok === false &&
+    typeof message.error === 'string' &&
+    message.error.length <= 1_000
+  )
+    return message;
+  return null;
 }
 
-export async function fetchYoutubeUpdates(): Promise<YoutubeSyncResult> {
-  let session;
-  try {
-    session = (await fetchJson(
-      `${LOCAL_HELPER}/api/cpd-library/session`,
-      { method: 'GET' },
-      5_000,
-    )) as { token?: string };
-  } catch {
-    throw new Error(
-      'Open the YouTube Folder Uploader on this computer, then try the live update again.',
+function bridgeRequestId() {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+export function fetchYoutubeUpdates(): Promise<YoutubeSyncResult> {
+  if (typeof window === 'undefined' || typeof document === 'undefined')
+    return Promise.reject(
+      new Error('YouTube updates are available in the browser.'),
     );
-  }
-  if (!session.token)
-    throw new Error('The local YouTube helper did not start a secure session.');
-  return (await fetchJson(
-    `${LOCAL_HELPER}/api/cpd-library/youtube-sync`,
-    {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-UI-Token': session.token,
-      },
-      body: '{}',
-    },
-    180_000,
-  )) as YoutubeSyncResult;
+
+  const requestId = bridgeRequestId();
+  const targetName = `cpd-library-youtube-${requestId}`;
+  const helperOrigin = new URL(LOCAL_HELPER).origin;
+
+  return new Promise((resolve, reject) => {
+    let popup: Window | null = null;
+    let settled = false;
+    let ready = false;
+    let timer = 0;
+    let closedPoll = 0;
+
+    function finish(error?: Error, result?: YoutubeSyncResult) {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener('message', receive);
+      window.clearTimeout(timer);
+      window.clearInterval(closedPoll);
+      if (popup && !popup.closed) popup.close();
+      if (error) reject(error);
+      else if (result) resolve(result);
+      else reject(new Error('The local YouTube updater returned no result.'));
+    }
+
+    function receive(event: MessageEvent) {
+      if (event.origin !== helperOrigin || event.source !== popup) return;
+      const message = youtubeBridgeMessage(event.data, requestId);
+      if (!message) return;
+      if (message.phase === 'ready') {
+        ready = true;
+        window.clearTimeout(timer);
+        timer = window.setTimeout(
+          () => finish(new Error('The YouTube refresh timed out.')),
+          10 * 60 * 1_000,
+        );
+        return;
+      }
+      if (message.ok === false) {
+        finish(new Error(message.error as string));
+        return;
+      }
+      finish(undefined, message.result as YoutubeSyncResult);
+    }
+
+    window.addEventListener('message', receive);
+    popup = window.open(
+      '',
+      targetName,
+      'popup,width=520,height=430,resizable=yes,scrollbars=yes',
+    );
+    if (!popup) {
+      finish(
+        new Error(
+          'Allow the library to open the local YouTube updater, then try again.',
+        ),
+      );
+      return;
+    }
+
+    const link = document.createElement('a');
+    link.href = `${LOCAL_HELPER}/cpd-library/youtube-sync?requestId=${requestId}`;
+    link.target = targetName;
+    link.referrerPolicy = 'origin';
+    link.hidden = true;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+
+    timer = window.setTimeout(
+      () =>
+        finish(
+          new Error(
+            'Open the YouTube Folder Uploader on this computer, then try the live update again.',
+          ),
+        ),
+      10_000,
+    );
+    closedPoll = window.setInterval(() => {
+      if (!popup?.closed || settled) return;
+      finish(
+        new Error(
+          ready
+            ? 'The local YouTube updater was closed before it finished.'
+            : 'The local YouTube updater could not be opened.',
+        ),
+      );
+    }, 500);
+  });
 }
