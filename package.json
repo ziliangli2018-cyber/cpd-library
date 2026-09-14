@@ -15,6 +15,7 @@
     "scan": "python scripts/import-catalogue.py",
     "refresh-youtube": "python scripts/refresh-youtube-channel.py",
     "link-youtube": "python scripts/link-youtube-uploads.py",
+    "youtube:patch": "python scripts/build-youtube-patch.py",
     "youtube:unlisted": "python scripts/set-youtube-unlisted.py",
     "encrypt": "node scripts/encrypt-library.mjs"
   },

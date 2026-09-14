@@ -50,6 +50,14 @@ npm run encrypt
 
 The scan tracks source metadata separately from human edits, preserves edited fields and stable IDs, adds new source files and flags missing sources without deleting records. It retains descriptively titled `.ts` recordings and flags possible same-name/size duplicates without merging them. Files modified in the last three minutes, zero-byte files and known undersized downloads are skipped. File presence does not verify playback or completeness when expected size is unknown. The YouTube refresh reads the authenticated channel's current uploads through the official API. Linking then uses the uploader's exact source path and only accepts IDs still present on that channel; manually edited links win.
 
+The local browser bridge uses a patch-only refresh so live YouTube data cannot overwrite notes, tags or course organisation:
+
+```powershell
+npm run youtube:patch
+```
+
+It writes `.private/youtube-sync-patch.json` with lecture IDs and YouTube metadata only. The OAuth refresh token, uploader state and decrypted catalogue stay local. YouTube titles are stored separately from editable lecture titles, and YouTube updates use `youtubeUpdatedAt` rather than advancing the human-edit timestamp. A static GitHub Pages tab cannot perform the authenticated refresh by itself because it cannot safely hold the channel refresh token or read the local uploader state.
+
 ## Make linked private videos shareable
 
 YouTube private videos cannot play for library readers unless their Google accounts were invited. The visibility helper can change catalogue-linked private videos on the configured channel to **unlisted**, allowing anyone with a library link to play them while keeping them out of normal public channel listings and search.

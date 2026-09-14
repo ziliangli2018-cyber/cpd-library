@@ -111,6 +111,11 @@ def run(config_path, output_path):
             current[video_id] = {
                 'video_id': video_id,
                 'title': snippet.get('title', playlist_items[video_id]['title']),
+                # Uploads made by the local scheduler include exact Course and
+                # Original file markers here. Keep the description in this
+                # private cache so a sync can recover path-based matches even
+                # when the uploader state is unavailable (for example, in CI).
+                'description': snippet.get('description', ''),
                 'published_at': snippet.get('publishedAt') or playlist_items[video_id]['published_at'],
                 'privacy_status': status.get('privacyStatus'),
                 'upload_status': status.get('uploadStatus'),
